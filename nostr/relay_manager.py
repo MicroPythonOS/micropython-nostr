@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 
 from .event import Event
 from .filter import Filters
@@ -37,25 +38,31 @@ class RelayManager:
 
     def open_connections(self, ssl_options: dict = None, proxy: dict = None):
         for relay in self.relays.values():
+            print("starting relay.connect thread...")
             threading.Thread(
                 target=relay.connect,
                 args=(ssl_options, proxy),
                 name=f"{relay.url}-thread",
                 daemon=True,
             ).start()
-
-            threading.Thread(
-                target=relay.queue_worker, name=f"{relay.url}-queue", daemon=True
-            ).start()
+            #time.sleep(3)
+            #print("starting relay send.queue_worker thread...")
+            #threading.Thread(
+            #    target=relay.queue_worker, name=f"{relay.url}-queue", daemon=True
+            #).start()
+            #time.sleep(1)
 
     def close_connections(self):
         for relay in self.relays.values():
             relay.close()
+            relay.stop_send_queue()
+            # maybe also do stop_connect() thread?
 
     def publish_message(self, message: str):
         for relay in self.relays.values():
             if relay.policy.should_write:
                 relay.publish(message)
+                time.sleep(1)
 
     def publish_event(self, event: Event):
         """Verifies that the Event is publishable before submitting it to relays"""

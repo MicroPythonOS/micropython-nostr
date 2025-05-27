@@ -67,6 +67,7 @@ class MessagePool:
                 e["tags"],
                 e["sig"],
             )
+            #print(f"message_pool.py process_message: {event.to_message()}")
             with self.lock:
                 if not event.id in self._unique_events:
                     self.events.put(EventMessage(event, subscription_id, url))

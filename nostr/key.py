@@ -1,10 +1,12 @@
 import secrets
 import base64
 import secp256k1
-from cffi import FFI
+#from cffi import FFI
+from secp256k1_compat import FFI
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 from hashlib import sha256
+import binascii
 
 from .delegation import Delegation
 from .event import EncryptedDirectMessage, Event, EventKind
@@ -64,7 +66,7 @@ class PrivateKey:
 
     def compute_shared_secret(self, public_key_hex: str) -> bytes:
         pk = secp256k1.PublicKey(bytes.fromhex("02" + public_key_hex), True)
-        return pk.ecdh(self.raw_secret, hashfn=copy_x)
+        return pk.ecdh(self.raw_secret, hashfn=copy_x) # the hashfn isn't passed by secp256k1_compat.py so libsecp256k1.c is actually doing this copy_x hardcoded
 
     def encrypt_message(self, message: str, public_key_hex: str) -> str:
         padder = padding.PKCS7(128).padder()
@@ -109,16 +111,18 @@ class PrivateKey:
         return sig.hex()
 
     def sign_event(self, event: Event) -> None:
-        if event.kind == EventKind.ENCRYPTED_DIRECT_MESSAGE and event.content is None:
+        if (event.kind == EventKind.ENCRYPTED_DIRECT_MESSAGE or event.kind == 23194) and event.content is None:
             self.encrypt_dm(event)
         if event.public_key is None:
             event.public_key = self.public_key.hex()
         event.signature = self.sign_message_hash(bytes.fromhex(event.id))
 
     def sign_delegation(self, delegation: Delegation) -> None:
-        delegation.signature = self.sign_message_hash(
-            sha256(delegation.delegation_token.encode()).digest()
-        )
+        #delegation.signature = self.sign_message_hash(
+        #    sha256(delegation.delegation_token.encode()).digest()
+        #)    
+        hash_bytes = sha256(delegation.delegation_token.encode()).digest()
+        delegation.signature = self.sign_message_hash(binascii.hexlify(hash_bytes).decode())
 
     def __eq__(self, other):
         return self.raw_secret == other.raw_secret

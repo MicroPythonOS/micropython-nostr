@@ -1,8 +1,8 @@
 import time
-from dataclasses import dataclass
+#from dataclasses import dataclass
 
 
-@dataclass
+#@dataclass
 class Delegation:
     delegator_pubkey: str
     delegatee_pubkey: str

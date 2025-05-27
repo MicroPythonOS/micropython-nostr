@@ -42,6 +42,7 @@ class Relay:
         self.proxy: dict = {}
         self.lock = Lock()
         self.queue = Queue()
+        self.stop_queue = False
         self.ws = WebSocketApp(
             url,
             on_open=self._on_open,
@@ -67,6 +68,9 @@ class Relay:
     def close(self):
         self.ws.close()
 
+    def stop_send_queue(self):
+        self.stop_queue = True
+
     def check_reconnect(self):
         try:
             self.close()
@@ -83,16 +87,26 @@ class Relay:
         return ping_ms if self.connected and ping_ms > 0 else 0
 
     def publish(self, message: str):
-        self.queue.put(message)
+        #print(f"putting message on queue: {message[0:30]}")
+        #self.queue.put(message)
+        #print(f"publish: queue now has {self.queue.qsize()} items")
+        # just send it directly instead of queuing, that way the queue worker isn't needed
+        self.ws.send(message)
 
     def queue_worker(self):
-        while True:
+        import _thread
+        while not self.stop_queue:
+            time.sleep(0.5)
             if self.connected:
-                message = self.queue.get()
-                self.num_sent_events += 1
-                self.ws.send(message)
-            else:
-                time.sleep(0.1)
+                try:
+                    message = self.queue.get() # this used to be a blocking operation
+                    self.num_sent_events += 1
+                    self.ws.send(message)
+                    import micropython
+                    print(f"queue_worker thread stack used after sending: {micropython.stack_use()}")
+                except Exception as e:
+                    #print("queue_worker got empty queue, no biggie!")
+                    pass
 
     def add_subscription(self, id, filters: Filters):
         with self.lock:
@@ -118,19 +132,24 @@ class Relay:
         }
 
     def _on_open(self, class_obj):
+        print("relay.py on_open")
         self.connected = True
         pass
 
     def _on_close(self, class_obj, status_code, message):
+        print("relay.py on_close")
         self.connected = False
         pass
 
     def _on_message(self, class_obj, message: str):
+        print(f"relay.py _on_message received: {message}")
         if self._is_valid_message(message):
             self.num_received_events += 1
+            import micropython
             self.message_pool.add_message(message, self.url)
 
     def _on_error(self, class_obj, error):
+        print("relay.py got error")
         self.connected = False
         self.error_counter += 1
         if self.error_threshold and self.error_counter > self.error_threshold:
@@ -139,9 +158,11 @@ class Relay:
             self.check_reconnect()
 
     def _on_ping(self, class_obj, message):
+        print("relay.py on_ping")
         return
 
     def _on_pong(self, class_obj, message):
+        print("relay.py on_pong")
         return
 
     def _is_valid_message(self, message: str) -> bool:
