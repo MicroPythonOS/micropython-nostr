@@ -53,7 +53,7 @@ class Event:
             raise TypeError("Argument 'content' must be of type str")
 
         if self.created_at is None:
-            self.created_at = int(time.time()) # TODO: this needs fixing on esp32 to correct for the different epoch
+            self.created_at = self.epoch_seconds() # esp32 uses different epoch
 
     @staticmethod
     def serialize(
@@ -114,6 +114,16 @@ class Event:
             ]
         )
 
+    @staticmethod
+    # on esp32, the time uses a different epoch, so this function is used to be in spec with the Nostr protocol:
+    def epoch_seconds():
+        import sys
+        if sys.platform == "esp32":
+            # on esp32, it needs this correction:
+            return time.time() + 946684800
+        else:
+            return round(time.time())
+
 
 #@dataclass
 class EncryptedDirectMessage(Event):
@@ -139,10 +149,9 @@ class EncryptedDirectMessage(Event):
     
             if self.recipient_pubkey is None:
                 raise Exception("Must specify a recipient_pubkey.")
-    
-            #kind=EventKind.ENCRYPTED_DIRECT_MESSAGE # TODO: make this configurable
-            self.kind=23194
-            #print(f"event.py __init__ setting kind: {self.kind}")
+
+            if not kwargs.get("kind"): # allow the caller to use these encrypted messages for NWC (kind 23194) etc.
+                kind=EventKind.ENCRYPTED_DIRECT_MESSAGE
             super().__post_init__()
     
             # Must specify the DM recipient's pubkey in a 'p' tag
@@ -161,3 +170,5 @@ class EncryptedDirectMessage(Event):
         # doesn't seem to work:
         #return super().id
         return Event.compute_id(self.public_key, self.created_at, self.kind, self.tags, self.content)
+
+
