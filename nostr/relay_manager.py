@@ -83,5 +83,6 @@ class RelayManager:
                 #print(f"connected: {relay.url}")
                 nrconnected += 1
             else:
+                pass
                 #print(f"not connected: {relay.url}")
         return nrconnected
