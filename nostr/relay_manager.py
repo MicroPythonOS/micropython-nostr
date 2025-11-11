@@ -75,3 +75,13 @@ class RelayManager:
                 f"Could not publish {event.id}: failed to verify signature {event.signature}"
             )
         self.publish_message(event.to_message())
+
+    def connected_relays(self):
+        nrconnected = 0
+        for relay in self.relays.values():
+            if relay.connected is True:
+                #print(f"connected: {relay.url}")
+                nrconnected += 1
+            else:
+                #print(f"not connected: {relay.url}")
+        return nrconnected
