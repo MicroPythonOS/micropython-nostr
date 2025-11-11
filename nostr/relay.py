@@ -102,7 +102,7 @@ class Relay:
         # just send it directly instead of queuing, that way the queue worker isn't needed
         self.ws.send(message)
 
-    def queue_worker(self):
+    def unused_queue_worker(self):
         import _thread
         while not self.stop_queue:
             time.sleep(0.5)
@@ -153,7 +153,6 @@ class Relay:
         print(f"relay.py _on_message received: {message}")
         if self._is_valid_message(message):
             self.num_received_events += 1
-            import micropython
             self.message_pool.add_message(message, self.url)
 
     def _on_error(self, class_obj, error):
