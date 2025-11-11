@@ -1,3 +1,4 @@
+import uasyncio as asyncio
 import json
 import time
 from queue import Queue
@@ -53,20 +54,29 @@ class Relay:
             on_pong=self._on_pong,
         )
 
-    def connect(self, ssl_options: dict = None, proxy: dict = None):
+    async def connect(self, ssl_options: dict = None, proxy: dict = None):
         self.ssl_options = ssl_options
         self.proxy = proxy
         if not self.connected:
-            self.ws.run_forever(
-                sslopt=ssl_options,
-                http_proxy_host=None if proxy is None else proxy.get("host"),
-                http_proxy_port=None if proxy is None else proxy.get("port"),
-                proxy_type=None if proxy is None else proxy.get("type"),
-                ping_interval=5,
-            )
+            print("doing await run_forever")
+            try:
+                await self.ws.run_forever(
+                    sslopt=ssl_options,
+                    http_proxy_host=None if proxy is None else proxy.get("host"),
+                    http_proxy_port=None if proxy is None else proxy.get("port"),
+                    proxy_type=None if proxy is None else proxy.get("type"),
+                    ping_interval=5
+                    )
+            except Exception as e:
+                print(f"relay.py connect self.ws.run_forever got exception: {e}")
 
-    def close(self):
-        self.ws.close()
+    async def close(self):
+        print(f"relay.close() called for {self.url}")
+        try:
+            await self.ws.close()
+            print(f"after await self.ws.close() for {self.url}")
+        except Exception as e:
+            print(f"relay.py close self.ws.close got exception: {e}")
 
     def stop_send_queue(self):
         self.stop_queue = True
@@ -78,7 +88,6 @@ class Relay:
             pass
         self.connected = False
         if self.reconnect:
-            time.sleep(1)
             self.connect(self.ssl_options, self.proxy)
 
     @property
@@ -134,7 +143,6 @@ class Relay:
     def _on_open(self, class_obj):
         print("relay.py on_open")
         self.connected = True
-        pass
 
     def _on_close(self, class_obj, status_code, message):
         print("relay.py on_close")

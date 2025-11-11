@@ -1,3 +1,4 @@
+import uasyncio as asyncio
 import json
 import threading
 import time
@@ -36,33 +37,33 @@ class RelayManager:
         for relay in self.relays.values():
             relay.close_subscription(id)
 
-    def open_connections(self, ssl_options: dict = None, proxy: dict = None):
+    async def open_connections(self, ssl_options: dict = None, proxy: dict = None):
         for relay in self.relays.values():
             print("starting relay.connect thread...")
-            threading.Thread(
-                target=relay.connect,
-                args=(ssl_options, proxy),
-                name=f"{relay.url}-thread",
-                daemon=True,
-            ).start()
-            #time.sleep(3)
+            self.connected = False
+            relay.task = asyncio.create_task(relay.connect(ssl_options, proxy))
             #print("starting relay send.queue_worker thread...")
             #threading.Thread(
             #    target=relay.queue_worker, name=f"{relay.url}-queue", daemon=True
             #).start()
             #time.sleep(1)
 
-    def close_connections(self):
+    async def close_connections(self):
         for relay in self.relays.values():
-            relay.close()
-            relay.stop_send_queue()
+            print(f"closing relay {relay.url}")
+            try:
+                await relay.close()
+            except Exception as e:
+                print(f"relay_manager.py close_connections relay.close() got exception: {e}")
+            #relay.stop_send_queue()
+            print(f"closed relay {relay.url}, now cancelling task...")
+            relay.task.cancel()
             # maybe also do stop_connect() thread?
 
     def publish_message(self, message: str):
         for relay in self.relays.values():
-            if relay.policy.should_write:
+            if relay.policy.should_write and relay.connected:
                 relay.publish(message)
-                time.sleep(1)
 
     def publish_event(self, event: Event):
         """Verifies that the Event is publishable before submitting it to relays"""
