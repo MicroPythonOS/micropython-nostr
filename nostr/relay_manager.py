@@ -61,7 +61,7 @@ class RelayManager:
             # maybe also do stop_connect() thread?
 
     def publish_message(self, message: str):
-        print("publishing message to relays: {self.relays}")
+        print(f"publishing message to relays: {self.relays}")
         for relay in self.relays.values():
             if relay.policy.should_write and relay.connected:
                 relay.publish(message)
