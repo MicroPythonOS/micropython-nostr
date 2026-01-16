@@ -1,6 +1,5 @@
 import uasyncio as asyncio
 import json
-import threading
 import time
 
 from .event import Event
@@ -39,14 +38,9 @@ class RelayManager:
 
     async def open_connections(self, ssl_options: dict = None, proxy: dict = None):
         for relay in self.relays.values():
-            print("starting relay.connect thread...")
+            print("starting relay.connect task...")
             self.connected = False
             relay.task = asyncio.create_task(relay.connect(ssl_options, proxy))
-            #print("starting relay send.queue_worker thread...")
-            #threading.Thread(
-            #    target=relay.queue_worker, name=f"{relay.url}-queue", daemon=True
-            #).start()
-            #time.sleep(1)
 
     async def close_connections(self):
         for relay in self.relays.values():
@@ -55,10 +49,8 @@ class RelayManager:
                 await relay.close()
             except Exception as e:
                 print(f"relay_manager.py close_connections relay.close() got exception: {e}")
-            #relay.stop_send_queue()
             print(f"closed relay {relay.url}, now cancelling task...")
             relay.task.cancel()
-            # maybe also do stop_connect() thread?
 
     def publish_message(self, message: str):
         print(f"publishing message to relays: {self.relays}")

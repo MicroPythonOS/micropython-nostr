@@ -1,8 +1,7 @@
-import uasyncio as asyncio
 import json
 import time
-from queue import Queue
 from threading import Lock
+
 from websocket import WebSocketApp
 from .event import Event
 from .filter import Filters
@@ -42,8 +41,6 @@ class Relay:
         self.ssl_options: dict = {}
         self.proxy: dict = {}
         self.lock = Lock()
-        self.queue = Queue()
-        self.stop_queue = False
         self.ws = WebSocketApp(
             url,
             on_open=self._on_open,
@@ -78,9 +75,6 @@ class Relay:
         except Exception as e:
             print(f"relay.py close self.ws.close got exception: {e}")
 
-    def stop_send_queue(self):
-        self.stop_queue = True
-
     def check_reconnect(self):
         try:
             self.close()
@@ -96,26 +90,7 @@ class Relay:
         return ping_ms if self.connected and ping_ms > 0 else 0
 
     def publish(self, message: str):
-        #print(f"putting message on queue: {message[0:30]}")
-        #self.queue.put(message)
-        #print(f"publish: queue now has {self.queue.qsize()} items")
-        # just send it directly instead of queuing, that way the queue worker isn't needed
         self.ws.send(message)
-
-    def unused_queue_worker(self):
-        import _thread
-        while not self.stop_queue:
-            time.sleep(0.5)
-            if self.connected:
-                try:
-                    message = self.queue.get() # this used to be a blocking operation
-                    self.num_sent_events += 1
-                    self.ws.send(message)
-                    import micropython
-                    print(f"queue_worker thread stack used after sending: {micropython.stack_use()}")
-                except Exception as e:
-                    #print("queue_worker got empty queue, no biggie!")
-                    pass
 
     def add_subscription(self, id, filters: Filters):
         with self.lock:
