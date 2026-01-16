@@ -87,3 +87,12 @@ class RelayManager:
                 pass
                 #print(f"not connected: {relay.url}")
         return nrconnected
+
+    def connected_or_errored_relays(self):
+        nrconnected = 0
+        for relay in self.relays.values():
+            if relay.connected is True:
+                nrconnected += 1
+            elif relay.error_counter > 0:
+                nrconnected += 1
+        return nrconnected
