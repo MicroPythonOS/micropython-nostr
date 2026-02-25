@@ -2,7 +2,7 @@ import json
 import time
 from threading import Lock
 
-from websocket import WebSocketApp
+from uaiowebsocket import WebSocketApp
 from .event import Event
 from .filter import Filters
 from .message_pool import MessagePool
