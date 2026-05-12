@@ -131,7 +131,10 @@ class Relay:
             self.message_pool.add_message(message, self.url)
 
     def _on_error(self, class_obj, error):
-        print("relay.py got error")
+        # Include the error detail + relay URL so a failure is actionable
+        # from logs alone — without this, downstream debugging had to
+        # resort to patching the library to surface the exception type.
+        print("relay.py got error for {}: {!r}".format(self.url, error))
         self.connected = False
         self.error_counter += 1
         if self.error_threshold and self.error_counter > self.error_threshold:
