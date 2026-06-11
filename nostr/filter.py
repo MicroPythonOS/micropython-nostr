@@ -1,5 +1,5 @@
 #from collections import UserList
-from userlist import UserList
+from .userlist import UserList
 from typing import List
 
 from .event import Event, EventKind
