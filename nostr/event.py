@@ -75,12 +75,19 @@ class Event:
         hash_bytes = sha256(serialized).digest()
         return binascii.hexlify(hash_bytes).decode()
 
+    _id = None
+
     @property
     def id(self) -> str:
-        # Always recompute the id to reflect the up-to-date state of the Event
+        if self._id is not None:
+            return self._id
         return Event.compute_id(
             self.public_key, self.created_at, self.kind, self.tags, self.content
         )
+
+    @id.setter
+    def id(self, value: str) -> None:
+        self._id = value
 
     def add_pubkey_ref(self, pubkey: str):
         """Adds a reference to a pubkey as a 'p' tag"""
@@ -161,8 +168,12 @@ class EncryptedDirectMessage(Event):
             if self.reference_event_id is not None:
                 self.add_event_ref(self.reference_event_id)
 
+    _id = None
+
     @property
     def id(self) -> str:
+        if self._id is not None:
+            return self._id
         if self.content is None:
             raise Exception(
                 "EncryptedDirectMessage `id` is undefined until its message is encrypted and stored in the `content` field"
@@ -170,5 +181,9 @@ class EncryptedDirectMessage(Event):
         # doesn't seem to work:
         #return super().id
         return Event.compute_id(self.public_key, self.created_at, self.kind, self.tags, self.content)
+
+    @id.setter
+    def id(self, value: str) -> None:
+        self._id = value
 
 

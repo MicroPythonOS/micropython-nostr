@@ -125,7 +125,7 @@ class Relay:
         pass
 
     def _on_message(self, class_obj, message: str):
-        print(f"relay.py _on_message received message of length {len(message)}: {message[:120]}...")
+        print(f"relay.py _on_message received message of length {len(message)}: {message[:360]}...")
         if self._is_valid_message(message):
             self.num_received_events += 1
             self.message_pool.add_message(message, self.url)
