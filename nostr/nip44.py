@@ -141,7 +141,7 @@ def _chacha20_py(key, nonce, data):
     return bytes(out)
 
 
-# On MicroPython use a viper-accelerated ChaCha20 core.  On CPython and other
+# On MicroPython use a native-accelerated ChaCha20 core.  On CPython and other
 # ports fall back to the pure-Python implementation above.
 def _chacha20(key, nonce, data):
     if len(key) != 32:
@@ -149,16 +149,16 @@ def _chacha20(key, nonce, data):
     if len(nonce) != 12:
         raise ValueError("ChaCha20 nonce must be 12 bytes")
     out = bytearray(len(data))
-    ks = bytearray(64)
-    _chacha20_viper(out, data, key, nonce, ks, ks, len(data))
+    _chacha20_native(out, data, key, nonce)
     return bytes(out)
 
 
 if sys.implementation.name == "micropython":
-    @micropython.viper
-    def _chacha20_viper(
-        out: ptr8, src: ptr8, key: ptr8, nonce: ptr8, ks: ptr32, ksb: ptr8, length: int
-    ):
+    @micropython.native
+    def _chacha20_native(out, src, key, nonce):
+        # native port of the 12-byte nonce / 32-byte key ChaCha20 variant used
+        # by NIP-44.  Python semantics for bytearray indexing work in native mode,
+        # while Viper's ptr8 byte loads fail cross-compilation for xtensawin.
         c0 = 0x61707865
         c1 = 0x3320646E
         c2 = 0x79622D32
@@ -177,8 +177,10 @@ if sys.implementation.name == "micropython":
         n1 = (nonce[4] | (nonce[5] << 8) | (nonce[6] << 16) | (nonce[7] << 24)) & 0xFFFFFFFF
         n2 = (nonce[8] | (nonce[9] << 8) | (nonce[10] << 16) | (nonce[11] << 24)) & 0xFFFFFFFF
 
-        pos = int(0)
-        counter = int(0)
+        length = len(src)
+        pos = 0
+        counter = 0
+        ks = bytearray(64)
         while pos < length:
             x0 = c0
             x1 = c1
@@ -199,103 +201,102 @@ if sys.implementation.name == "micropython":
 
             for _ in range(10):
                 # column round
-                t0 = (x0 + x4) & 0xFFFFFFFF
-                x12 = (((x12 ^ t0) << 16) | ((x12 ^ t0) >> 16)) & 0xFFFFFFFF
+                _t0 = (x0 + x4) & 0xFFFFFFFF
+                x12 = (((x12 ^ _t0) << 16) | ((x12 ^ _t0) >> 16)) & 0xFFFFFFFF
                 x8 = (x8 + x12) & 0xFFFFFFFF
                 x4 = (((x4 ^ x8) << 12) | ((x4 ^ x8) >> 20)) & 0xFFFFFFFF
-                x0 = (t0 + x4) & 0xFFFFFFFF
+                x0 = (_t0 + x4) & 0xFFFFFFFF
                 x12 = (((x12 ^ x0) << 8) | ((x12 ^ x0) >> 24)) & 0xFFFFFFFF
                 x8 = (x8 + x12) & 0xFFFFFFFF
                 x4 = (((x4 ^ x8) << 7) | ((x4 ^ x8) >> 25)) & 0xFFFFFFFF
 
-                t0 = (x1 + x5) & 0xFFFFFFFF
-                x13 = (((x13 ^ t0) << 16) | ((x13 ^ t0) >> 16)) & 0xFFFFFFFF
+                _t0 = (x1 + x5) & 0xFFFFFFFF
+                x13 = (((x13 ^ _t0) << 16) | ((x13 ^ _t0) >> 16)) & 0xFFFFFFFF
                 x9 = (x9 + x13) & 0xFFFFFFFF
                 x5 = (((x5 ^ x9) << 12) | ((x5 ^ x9) >> 20)) & 0xFFFFFFFF
-                x1 = (t0 + x5) & 0xFFFFFFFF
+                x1 = (_t0 + x5) & 0xFFFFFFFF
                 x13 = (((x13 ^ x1) << 8) | ((x13 ^ x1) >> 24)) & 0xFFFFFFFF
                 x9 = (x9 + x13) & 0xFFFFFFFF
                 x5 = (((x5 ^ x9) << 7) | ((x5 ^ x9) >> 25)) & 0xFFFFFFFF
 
-                t0 = (x2 + x6) & 0xFFFFFFFF
-                x14 = (((x14 ^ t0) << 16) | ((x14 ^ t0) >> 16)) & 0xFFFFFFFF
+                _t0 = (x2 + x6) & 0xFFFFFFFF
+                x14 = (((x14 ^ _t0) << 16) | ((x14 ^ _t0) >> 16)) & 0xFFFFFFFF
                 x10 = (x10 + x14) & 0xFFFFFFFF
                 x6 = (((x6 ^ x10) << 12) | ((x6 ^ x10) >> 20)) & 0xFFFFFFFF
-                x2 = (t0 + x6) & 0xFFFFFFFF
+                x2 = (_t0 + x6) & 0xFFFFFFFF
                 x14 = (((x14 ^ x2) << 8) | ((x14 ^ x2) >> 24)) & 0xFFFFFFFF
                 x10 = (x10 + x14) & 0xFFFFFFFF
                 x6 = (((x6 ^ x10) << 7) | ((x6 ^ x10) >> 25)) & 0xFFFFFFFF
 
-                t0 = (x3 + x7) & 0xFFFFFFFF
-                x15 = (((x15 ^ t0) << 16) | ((x15 ^ t0) >> 16)) & 0xFFFFFFFF
+                _t0 = (x3 + x7) & 0xFFFFFFFF
+                x15 = (((x15 ^ _t0) << 16) | ((x15 ^ _t0) >> 16)) & 0xFFFFFFFF
                 x11 = (x11 + x15) & 0xFFFFFFFF
                 x7 = (((x7 ^ x11) << 12) | ((x7 ^ x11) >> 20)) & 0xFFFFFFFF
-                x3 = (t0 + x7) & 0xFFFFFFFF
+                x3 = (_t0 + x7) & 0xFFFFFFFF
                 x15 = (((x15 ^ x3) << 8) | ((x15 ^ x3) >> 24)) & 0xFFFFFFFF
                 x11 = (x11 + x15) & 0xFFFFFFFF
                 x7 = (((x7 ^ x11) << 7) | ((x7 ^ x11) >> 25)) & 0xFFFFFFFF
 
                 # diagonal round
-                t0 = (x0 + x5) & 0xFFFFFFFF
-                x15 = (((x15 ^ t0) << 16) | ((x15 ^ t0) >> 16)) & 0xFFFFFFFF
+                _t0 = (x0 + x5) & 0xFFFFFFFF
+                x15 = (((x15 ^ _t0) << 16) | ((x15 ^ _t0) >> 16)) & 0xFFFFFFFF
                 x10 = (x10 + x15) & 0xFFFFFFFF
                 x5 = (((x5 ^ x10) << 12) | ((x5 ^ x10) >> 20)) & 0xFFFFFFFF
-                x0 = (t0 + x5) & 0xFFFFFFFF
+                x0 = (_t0 + x5) & 0xFFFFFFFF
                 x15 = (((x15 ^ x0) << 8) | ((x15 ^ x0) >> 24)) & 0xFFFFFFFF
                 x10 = (x10 + x15) & 0xFFFFFFFF
                 x5 = (((x5 ^ x10) << 7) | ((x5 ^ x10) >> 25)) & 0xFFFFFFFF
 
-                t0 = (x1 + x6) & 0xFFFFFFFF
-                x12 = (((x12 ^ t0) << 16) | ((x12 ^ t0) >> 16)) & 0xFFFFFFFF
+                _t0 = (x1 + x6) & 0xFFFFFFFF
+                x12 = (((x12 ^ _t0) << 16) | ((x12 ^ _t0) >> 16)) & 0xFFFFFFFF
                 x11 = (x11 + x12) & 0xFFFFFFFF
                 x6 = (((x6 ^ x11) << 12) | ((x6 ^ x11) >> 20)) & 0xFFFFFFFF
-                x1 = (t0 + x6) & 0xFFFFFFFF
+                x1 = (_t0 + x6) & 0xFFFFFFFF
                 x12 = (((x12 ^ x1) << 8) | ((x12 ^ x1) >> 24)) & 0xFFFFFFFF
                 x11 = (x11 + x12) & 0xFFFFFFFF
                 x6 = (((x6 ^ x11) << 7) | ((x6 ^ x11) >> 25)) & 0xFFFFFFFF
 
-                t0 = (x2 + x7) & 0xFFFFFFFF
-                x13 = (((x13 ^ t0) << 16) | ((x13 ^ t0) >> 16)) & 0xFFFFFFFF
+                _t0 = (x2 + x7) & 0xFFFFFFFF
+                x13 = (((x13 ^ _t0) << 16) | ((x13 ^ _t0) >> 16)) & 0xFFFFFFFF
                 x8 = (x8 + x13) & 0xFFFFFFFF
                 x7 = (((x7 ^ x8) << 12) | ((x7 ^ x8) >> 20)) & 0xFFFFFFFF
-                x2 = (t0 + x7) & 0xFFFFFFFF
+                x2 = (_t0 + x7) & 0xFFFFFFFF
                 x13 = (((x13 ^ x2) << 8) | ((x13 ^ x2) >> 24)) & 0xFFFFFFFF
                 x8 = (x8 + x13) & 0xFFFFFFFF
                 x7 = (((x7 ^ x8) << 7) | ((x7 ^ x8) >> 25)) & 0xFFFFFFFF
 
-                t0 = (x3 + x4) & 0xFFFFFFFF
-                x14 = (((x14 ^ t0) << 16) | ((x14 ^ t0) >> 16)) & 0xFFFFFFFF
+                _t0 = (x3 + x4) & 0xFFFFFFFF
+                x14 = (((x14 ^ _t0) << 16) | ((x14 ^ _t0) >> 16)) & 0xFFFFFFFF
                 x9 = (x9 + x14) & 0xFFFFFFFF
                 x4 = (((x4 ^ x9) << 12) | ((x4 ^ x9) >> 20)) & 0xFFFFFFFF
-                x3 = (t0 + x4) & 0xFFFFFFFF
+                x3 = (_t0 + x4) & 0xFFFFFFFF
                 x14 = (((x14 ^ x3) << 8) | ((x14 ^ x3) >> 24)) & 0xFFFFFFFF
                 x9 = (x9 + x14) & 0xFFFFFFFF
                 x4 = (((x4 ^ x9) << 7) | ((x4 ^ x9) >> 25)) & 0xFFFFFFFF
 
-            ks[0] = (x0 + c0) & 0xFFFFFFFF
-            ks[1] = (x1 + c1) & 0xFFFFFFFF
-            ks[2] = (x2 + c2) & 0xFFFFFFFF
-            ks[3] = (x3 + c3) & 0xFFFFFFFF
-            ks[4] = (x4 + k0) & 0xFFFFFFFF
-            ks[5] = (x5 + k1) & 0xFFFFFFFF
-            ks[6] = (x6 + k2) & 0xFFFFFFFF
-            ks[7] = (x7 + k3) & 0xFFFFFFFF
-            ks[8] = (x8 + k4) & 0xFFFFFFFF
-            ks[9] = (x9 + k5) & 0xFFFFFFFF
-            ks[10] = (x10 + k6) & 0xFFFFFFFF
-            ks[11] = (x11 + k7) & 0xFFFFFFFF
-            ks[12] = (x12 + counter) & 0xFFFFFFFF
-            ks[13] = (x13 + n0) & 0xFFFFFFFF
-            ks[14] = (x14 + n1) & 0xFFFFFFFF
-            ks[15] = (x15 + n2) & 0xFFFFFFFF
+            ks[0:4] = (_u32(x0 + c0)).to_bytes(4, "little")
+            ks[4:8] = (_u32(x1 + c1)).to_bytes(4, "little")
+            ks[8:12] = (_u32(x2 + c2)).to_bytes(4, "little")
+            ks[12:16] = (_u32(x3 + c3)).to_bytes(4, "little")
+            ks[16:20] = (_u32(x4 + k0)).to_bytes(4, "little")
+            ks[20:24] = (_u32(x5 + k1)).to_bytes(4, "little")
+            ks[24:28] = (_u32(x6 + k2)).to_bytes(4, "little")
+            ks[28:32] = (_u32(x7 + k3)).to_bytes(4, "little")
+            ks[32:36] = (_u32(x8 + k4)).to_bytes(4, "little")
+            ks[36:40] = (_u32(x9 + k5)).to_bytes(4, "little")
+            ks[40:44] = (_u32(x10 + k6)).to_bytes(4, "little")
+            ks[44:48] = (_u32(x11 + k7)).to_bytes(4, "little")
+            ks[48:52] = (_u32(x12 + counter)).to_bytes(4, "little")
+            ks[52:56] = (_u32(x13 + n0)).to_bytes(4, "little")
+            ks[56:60] = (_u32(x14 + n1)).to_bytes(4, "little")
+            ks[60:64] = (_u32(x15 + n2)).to_bytes(4, "little")
 
             end = pos + 64
             if end > length:
                 end = length
-            limit = end - pos
-            i = int(0)
-            while i < limit:
-                out[pos + i] = src[pos + i] ^ ksb[i]
+            i = pos
+            while i < end:
+                out[i] = src[i] ^ ks[i - pos]
                 i += 1
             pos = end
             counter = (counter + 1) & 0xFFFFFFFF
