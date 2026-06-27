@@ -88,6 +88,7 @@ def make_rumor(
     recipients,
     subject=None,
     reply_to=None,
+    created_at=None,
 ):
     """Create a kind 14 rumor dict.
 
@@ -104,13 +105,15 @@ def make_rumor(
         "content": content,
         "tags": tags,
         "pubkey": private_key.public_key.hex(),
-        "created_at": int(time.time()),
+        "created_at": created_at if created_at is not None else int(time.time()),
     }
 
 
-def make_seal(private_key, rumor, recipient_public_key_hex):
+def make_seal(private_key, rumor, recipient_public_key_hex, created_at=None):
     """Return a signed kind 13 seal event dict addressed to `recipient`."""
-    rumor.setdefault("created_at", int(time.time()))
+    if created_at is None:
+        created_at = int(time.time())
+    rumor.setdefault("created_at", created_at)
     clear_text = json.dumps(rumor, separators=(",", ":"))
     conv_key = get_conversation_key(private_key, recipient_public_key_hex)
     ciphertext = nip44_encrypt(clear_text, conv_key)
@@ -119,7 +122,7 @@ def make_seal(private_key, rumor, recipient_public_key_hex):
         "content": ciphertext,
         "tags": [],
         "pubkey": private_key.public_key.hex(),
-        "created_at": int(time.time()),
+        "created_at": created_at,
     }
     sealed_event = Event(
         content=seal["content"],
@@ -133,8 +136,10 @@ def make_seal(private_key, rumor, recipient_public_key_hex):
     return seal
 
 
-def make_gift_wrap(recipient_public_key_hex, seal):
+def make_gift_wrap(recipient_public_key_hex, seal, created_at=None):
     """Return a kind 1059 gift-wrap event dict addressed to the recipient."""
+    if created_at is None:
+        created_at = int(time.time())
     wrapper = PrivateKey()
     clear_text = json.dumps(seal, separators=(",", ":"))
     conv_key = get_conversation_key(wrapper, recipient_public_key_hex)
@@ -145,7 +150,7 @@ def make_gift_wrap(recipient_public_key_hex, seal):
         "content": ciphertext,
         "tags": tags,
         "pubkey": wrapper.public_key.hex(),
-        "created_at": int(time.time()),
+        "created_at": created_at,
     }
     wrapped_event = Event(
         content=gift["content"],
@@ -159,7 +164,9 @@ def make_gift_wrap(recipient_public_key_hex, seal):
     return gift
 
 
-def make_nip17_messages(private_key, content, recipients, subject=None, reply_to=None):
+def make_nip17_messages(
+    private_key, content, recipients, subject=None, reply_to=None, created_at=None
+):
     """Create a gift-wrap event for each recipient.
 
     Returns a list of normalized Event-compatible dicts that can be published
@@ -179,16 +186,20 @@ def make_nip17_messages(private_key, content, recipients, subject=None, reply_to
         deduped.append(own)
     recipients = deduped
 
+    if created_at is None:
+        created_at = int(time.time())
+
     rumor = make_rumor(
         private_key,
         content,
         recipients,
         subject=subject,
         reply_to=reply_to,
+        created_at=created_at,
     )
     messages = []
     for recipient in recipients:
-        seal = make_seal(private_key, dict(rumor), recipient)
-        gift = make_gift_wrap(recipient, seal)
+        seal = make_seal(private_key, dict(rumor), recipient, created_at=created_at)
+        gift = make_gift_wrap(recipient, seal, created_at=created_at)
         messages.append(gift)
     return messages
