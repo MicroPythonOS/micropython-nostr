@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import logging
+import sys
 
 import secrets
 
@@ -123,7 +124,7 @@ def _chacha20_block(key, nonce, counter):
     return out
 
 
-def _chacha20(key, nonce, data):
+def _chacha20_py(key, nonce, data):
     if len(key) != 32:
         raise ValueError("ChaCha20 key must be 32 bytes")
     if len(nonce) != 12:
@@ -138,6 +139,169 @@ def _chacha20(key, nonce, data):
         out.extend(b ^ block[j] for j, b in enumerate(chunk))
         counter += 1
     return bytes(out)
+
+
+# On MicroPython use a viper-accelerated ChaCha20 core.  On CPython and other
+# ports fall back to the pure-Python implementation above.
+def _chacha20(key, nonce, data):
+    if len(key) != 32:
+        raise ValueError("ChaCha20 key must be 32 bytes")
+    if len(nonce) != 12:
+        raise ValueError("ChaCha20 nonce must be 12 bytes")
+    out = bytearray(len(data))
+    ks = bytearray(64)
+    _chacha20_viper(out, data, key, nonce, ks, ks, len(data))
+    return bytes(out)
+
+
+if sys.implementation.name == "micropython":
+    @micropython.viper
+    def _chacha20_viper(
+        out: ptr8, src: ptr8, key: ptr8, nonce: ptr8, ks: ptr32, ksb: ptr8, length: int
+    ):
+        c0 = 0x61707865
+        c1 = 0x3320646E
+        c2 = 0x79622D32
+        c3 = 0x6B206574
+
+        k0 = (key[0] | (key[1] << 8) | (key[2] << 16) | (key[3] << 24)) & 0xFFFFFFFF
+        k1 = (key[4] | (key[5] << 8) | (key[6] << 16) | (key[7] << 24)) & 0xFFFFFFFF
+        k2 = (key[8] | (key[9] << 8) | (key[10] << 16) | (key[11] << 24)) & 0xFFFFFFFF
+        k3 = (key[12] | (key[13] << 8) | (key[14] << 16) | (key[15] << 24)) & 0xFFFFFFFF
+        k4 = (key[16] | (key[17] << 8) | (key[18] << 16) | (key[19] << 24)) & 0xFFFFFFFF
+        k5 = (key[20] | (key[21] << 8) | (key[22] << 16) | (key[23] << 24)) & 0xFFFFFFFF
+        k6 = (key[24] | (key[25] << 8) | (key[26] << 16) | (key[27] << 24)) & 0xFFFFFFFF
+        k7 = (key[28] | (key[29] << 8) | (key[30] << 16) | (key[31] << 24)) & 0xFFFFFFFF
+
+        n0 = (nonce[0] | (nonce[1] << 8) | (nonce[2] << 16) | (nonce[3] << 24)) & 0xFFFFFFFF
+        n1 = (nonce[4] | (nonce[5] << 8) | (nonce[6] << 16) | (nonce[7] << 24)) & 0xFFFFFFFF
+        n2 = (nonce[8] | (nonce[9] << 8) | (nonce[10] << 16) | (nonce[11] << 24)) & 0xFFFFFFFF
+
+        pos = int(0)
+        counter = int(0)
+        while pos < length:
+            x0 = c0
+            x1 = c1
+            x2 = c2
+            x3 = c3
+            x4 = k0
+            x5 = k1
+            x6 = k2
+            x7 = k3
+            x8 = k4
+            x9 = k5
+            x10 = k6
+            x11 = k7
+            x12 = counter
+            x13 = n0
+            x14 = n1
+            x15 = n2
+
+            for _ in range(10):
+                # column round
+                t0 = (x0 + x4) & 0xFFFFFFFF
+                x12 = (((x12 ^ t0) << 16) | ((x12 ^ t0) >> 16)) & 0xFFFFFFFF
+                x8 = (x8 + x12) & 0xFFFFFFFF
+                x4 = (((x4 ^ x8) << 12) | ((x4 ^ x8) >> 20)) & 0xFFFFFFFF
+                x0 = (t0 + x4) & 0xFFFFFFFF
+                x12 = (((x12 ^ x0) << 8) | ((x12 ^ x0) >> 24)) & 0xFFFFFFFF
+                x8 = (x8 + x12) & 0xFFFFFFFF
+                x4 = (((x4 ^ x8) << 7) | ((x4 ^ x8) >> 25)) & 0xFFFFFFFF
+
+                t0 = (x1 + x5) & 0xFFFFFFFF
+                x13 = (((x13 ^ t0) << 16) | ((x13 ^ t0) >> 16)) & 0xFFFFFFFF
+                x9 = (x9 + x13) & 0xFFFFFFFF
+                x5 = (((x5 ^ x9) << 12) | ((x5 ^ x9) >> 20)) & 0xFFFFFFFF
+                x1 = (t0 + x5) & 0xFFFFFFFF
+                x13 = (((x13 ^ x1) << 8) | ((x13 ^ x1) >> 24)) & 0xFFFFFFFF
+                x9 = (x9 + x13) & 0xFFFFFFFF
+                x5 = (((x5 ^ x9) << 7) | ((x5 ^ x9) >> 25)) & 0xFFFFFFFF
+
+                t0 = (x2 + x6) & 0xFFFFFFFF
+                x14 = (((x14 ^ t0) << 16) | ((x14 ^ t0) >> 16)) & 0xFFFFFFFF
+                x10 = (x10 + x14) & 0xFFFFFFFF
+                x6 = (((x6 ^ x10) << 12) | ((x6 ^ x10) >> 20)) & 0xFFFFFFFF
+                x2 = (t0 + x6) & 0xFFFFFFFF
+                x14 = (((x14 ^ x2) << 8) | ((x14 ^ x2) >> 24)) & 0xFFFFFFFF
+                x10 = (x10 + x14) & 0xFFFFFFFF
+                x6 = (((x6 ^ x10) << 7) | ((x6 ^ x10) >> 25)) & 0xFFFFFFFF
+
+                t0 = (x3 + x7) & 0xFFFFFFFF
+                x15 = (((x15 ^ t0) << 16) | ((x15 ^ t0) >> 16)) & 0xFFFFFFFF
+                x11 = (x11 + x15) & 0xFFFFFFFF
+                x7 = (((x7 ^ x11) << 12) | ((x7 ^ x11) >> 20)) & 0xFFFFFFFF
+                x3 = (t0 + x7) & 0xFFFFFFFF
+                x15 = (((x15 ^ x3) << 8) | ((x15 ^ x3) >> 24)) & 0xFFFFFFFF
+                x11 = (x11 + x15) & 0xFFFFFFFF
+                x7 = (((x7 ^ x11) << 7) | ((x7 ^ x11) >> 25)) & 0xFFFFFFFF
+
+                # diagonal round
+                t0 = (x0 + x5) & 0xFFFFFFFF
+                x15 = (((x15 ^ t0) << 16) | ((x15 ^ t0) >> 16)) & 0xFFFFFFFF
+                x10 = (x10 + x15) & 0xFFFFFFFF
+                x5 = (((x5 ^ x10) << 12) | ((x5 ^ x10) >> 20)) & 0xFFFFFFFF
+                x0 = (t0 + x5) & 0xFFFFFFFF
+                x15 = (((x15 ^ x0) << 8) | ((x15 ^ x0) >> 24)) & 0xFFFFFFFF
+                x10 = (x10 + x15) & 0xFFFFFFFF
+                x5 = (((x5 ^ x10) << 7) | ((x5 ^ x10) >> 25)) & 0xFFFFFFFF
+
+                t0 = (x1 + x6) & 0xFFFFFFFF
+                x12 = (((x12 ^ t0) << 16) | ((x12 ^ t0) >> 16)) & 0xFFFFFFFF
+                x11 = (x11 + x12) & 0xFFFFFFFF
+                x6 = (((x6 ^ x11) << 12) | ((x6 ^ x11) >> 20)) & 0xFFFFFFFF
+                x1 = (t0 + x6) & 0xFFFFFFFF
+                x12 = (((x12 ^ x1) << 8) | ((x12 ^ x1) >> 24)) & 0xFFFFFFFF
+                x11 = (x11 + x12) & 0xFFFFFFFF
+                x6 = (((x6 ^ x11) << 7) | ((x6 ^ x11) >> 25)) & 0xFFFFFFFF
+
+                t0 = (x2 + x7) & 0xFFFFFFFF
+                x13 = (((x13 ^ t0) << 16) | ((x13 ^ t0) >> 16)) & 0xFFFFFFFF
+                x8 = (x8 + x13) & 0xFFFFFFFF
+                x7 = (((x7 ^ x8) << 12) | ((x7 ^ x8) >> 20)) & 0xFFFFFFFF
+                x2 = (t0 + x7) & 0xFFFFFFFF
+                x13 = (((x13 ^ x2) << 8) | ((x13 ^ x2) >> 24)) & 0xFFFFFFFF
+                x8 = (x8 + x13) & 0xFFFFFFFF
+                x7 = (((x7 ^ x8) << 7) | ((x7 ^ x8) >> 25)) & 0xFFFFFFFF
+
+                t0 = (x3 + x4) & 0xFFFFFFFF
+                x14 = (((x14 ^ t0) << 16) | ((x14 ^ t0) >> 16)) & 0xFFFFFFFF
+                x9 = (x9 + x14) & 0xFFFFFFFF
+                x4 = (((x4 ^ x9) << 12) | ((x4 ^ x9) >> 20)) & 0xFFFFFFFF
+                x3 = (t0 + x4) & 0xFFFFFFFF
+                x14 = (((x14 ^ x3) << 8) | ((x14 ^ x3) >> 24)) & 0xFFFFFFFF
+                x9 = (x9 + x14) & 0xFFFFFFFF
+                x4 = (((x4 ^ x9) << 7) | ((x4 ^ x9) >> 25)) & 0xFFFFFFFF
+
+            ks[0] = (x0 + c0) & 0xFFFFFFFF
+            ks[1] = (x1 + c1) & 0xFFFFFFFF
+            ks[2] = (x2 + c2) & 0xFFFFFFFF
+            ks[3] = (x3 + c3) & 0xFFFFFFFF
+            ks[4] = (x4 + k0) & 0xFFFFFFFF
+            ks[5] = (x5 + k1) & 0xFFFFFFFF
+            ks[6] = (x6 + k2) & 0xFFFFFFFF
+            ks[7] = (x7 + k3) & 0xFFFFFFFF
+            ks[8] = (x8 + k4) & 0xFFFFFFFF
+            ks[9] = (x9 + k5) & 0xFFFFFFFF
+            ks[10] = (x10 + k6) & 0xFFFFFFFF
+            ks[11] = (x11 + k7) & 0xFFFFFFFF
+            ks[12] = (x12 + counter) & 0xFFFFFFFF
+            ks[13] = (x13 + n0) & 0xFFFFFFFF
+            ks[14] = (x14 + n1) & 0xFFFFFFFF
+            ks[15] = (x15 + n2) & 0xFFFFFFFF
+
+            end = pos + 64
+            if end > length:
+                end = length
+            limit = end - pos
+            i = int(0)
+            while i < limit:
+                out[pos + i] = src[pos + i] ^ ksb[i]
+                i += 1
+            pos = end
+            counter = (counter + 1) & 0xFFFFFFFF
+
+else:
+    _chacha20 = _chacha20_py
 
 
 def _calc_padded_len(unpadded_len):
