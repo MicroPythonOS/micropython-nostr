@@ -6,7 +6,6 @@ from secp256k1_compat import FFI
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 from hashlib import sha256
-import binascii
 
 from .delegation import Delegation
 from .event import EncryptedDirectMessage, Event, EventKind
@@ -25,7 +24,10 @@ class PublicKey:
         return self.raw_bytes.hex()
 
     def verify_signed_message_hash(self, hash: str, sig: str) -> bool:
-        pk = secp256k1.PublicKey(b"\x02" + self.raw_bytes, True)
+        pk = getattr(self, "_secp_key", None)
+        if pk is None:
+            pk = secp256k1.PublicKey(b"\x02" + self.raw_bytes, True)
+            self._secp_key = pk
         return pk.schnorr_verify(bytes.fromhex(hash), bytes.fromhex(sig), None, True)
 
     @classmethod
@@ -43,8 +45,9 @@ class PrivateKey:
         else:
             self.raw_secret = secrets.token_bytes(32)
 
-        sk = secp256k1.PrivateKey(self.raw_secret)
-        self.public_key = PublicKey(sk.pubkey.serialize()[1:])
+        self._secp_key = secp256k1.PrivateKey(self.raw_secret)
+        self.public_key = PublicKey(self._secp_key.pubkey.serialize()[1:])
+        self._pubkey_cache = {}
 
     @classmethod
     def from_nsec(cls, nsec: str):
@@ -61,11 +64,13 @@ class PrivateKey:
         return self.raw_secret.hex()
 
     def tweak_add(self, scalar: bytes) -> bytes:
-        sk = secp256k1.PrivateKey(self.raw_secret)
-        return sk.tweak_add(scalar)
+        return self._secp_key.tweak_add(scalar)
 
     def compute_shared_secret(self, public_key_hex: str) -> bytes:
-        pk = secp256k1.PublicKey(bytes.fromhex("02" + public_key_hex), True)
+        pk = self._pubkey_cache.get(public_key_hex)
+        if pk is None:
+            pk = secp256k1.PublicKey(bytes.fromhex("02" + public_key_hex), True)
+            self._pubkey_cache[public_key_hex] = pk
         return pk.ecdh(self.raw_secret, hashfn=copy_x) # the hashfn isn't passed by secp256k1_compat.py so libsecp256k1.c is actually doing this copy_x hardcoded
 
     def encrypt_message(self, message: str, public_key_hex: str) -> str:
@@ -106,8 +111,7 @@ class PrivateKey:
         return unpadded_data.decode()
 
     def sign_message_hash(self, hash: bytes) -> str:
-        sk = secp256k1.PrivateKey(self.raw_secret)
-        sig = sk.schnorr_sign(hash, None, raw=True)
+        sig = self._secp_key.schnorr_sign(hash, None, raw=True)
         return sig.hex()
 
     def sign_event(self, event: Event) -> None:
@@ -115,14 +119,16 @@ class PrivateKey:
             self.encrypt_dm(event)
         if event.public_key is None:
             event.public_key = self.public_key.hex()
-        event.signature = self.sign_message_hash(bytes.fromhex(event.id))
+        event_id_bytes = Event.compute_id_bytes(
+            event.public_key, event.created_at, event.kind, event.tags, event.content
+        )
+        event.id = event_id_bytes.hex()
+        event.signature = self.sign_message_hash(event_id_bytes)
 
     def sign_delegation(self, delegation: Delegation) -> None:
-        #delegation.signature = self.sign_message_hash(
-        #    sha256(delegation.delegation_token.encode()).digest()
-        #)    
-        hash_bytes = sha256(delegation.delegation_token.encode()).digest()
-        delegation.signature = self.sign_message_hash(binascii.hexlify(hash_bytes).decode())
+        delegation.signature = self.sign_message_hash(
+            sha256(delegation.delegation_token.encode()).digest()
+        )
 
     def __eq__(self, other):
         return self.raw_secret == other.raw_secret

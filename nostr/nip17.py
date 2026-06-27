@@ -131,8 +131,9 @@ def make_seal(private_key, rumor, recipient_public_key_hex, created_at=None):
         kind=seal["kind"],
         tags=seal["tags"],
     )
+    private_key.sign_event(sealed_event)
     seal["id"] = sealed_event.id
-    seal["sig"] = private_key.sign_message_hash(bytes.fromhex(sealed_event.id))
+    seal["sig"] = sealed_event.signature
     return seal
 
 
@@ -159,8 +160,9 @@ def make_gift_wrap(recipient_public_key_hex, seal, created_at=None):
         kind=gift["kind"],
         tags=gift["tags"],
     )
+    wrapper.sign_event(wrapped_event)
     gift["id"] = wrapped_event.id
-    gift["sig"] = wrapper.sign_message_hash(bytes.fromhex(wrapped_event.id))
+    gift["sig"] = wrapped_event.signature
     return gift
 
 

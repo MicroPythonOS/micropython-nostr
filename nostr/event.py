@@ -5,7 +5,6 @@ from enum import IntEnum
 from typing import List
 from secp256k1 import PublicKey
 from hashlib import sha256
-import binascii
 
 from .message_type import ClientMessageType
 
@@ -65,15 +64,20 @@ class Event:
         return data_str.encode()
 
     @staticmethod
+    def compute_id_bytes(
+        public_key: str, created_at: int, kind: int, tags: List[List[str]], content: str
+    ) -> bytes:
+        return sha256(
+            Event.serialize(public_key, created_at, kind, tags, content)
+        ).digest()
+
+    @staticmethod
     def compute_id(
         public_key: str, created_at: int, kind: int, tags: List[List[str]], content: str
-    ):
-        #return sha256(
-        #    Event.serialize(public_key, created_at, kind, tags, content)
-        #).hexdigest()
-        serialized = Event.serialize(public_key, created_at, kind, tags, content)
-        hash_bytes = sha256(serialized).digest()
-        return binascii.hexlify(hash_bytes).decode()
+    ) -> str:
+        return Event.compute_id_bytes(
+            public_key, created_at, kind, tags, content
+        ).hex()
 
     _id = None
 
