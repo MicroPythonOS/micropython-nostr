@@ -62,7 +62,8 @@ class Relay:
                     http_proxy_host=None if proxy is None else proxy.get("host"),
                     http_proxy_port=None if proxy is None else proxy.get("port"),
                     proxy_type=None if proxy is None else proxy.get("type"),
-                    ping_interval=5
+                    ping_interval=5,
+                    reconnect=5,
                     )
             except Exception as e:
                 print(f"relay.py connect self.ws.run_forever got exception: {e}")
@@ -116,16 +117,17 @@ class Relay:
         }
 
     def _on_open(self, class_obj):
-        print("relay.py on_open")
+        print("relay.py on_open {}".format(self.url))
         self.connected = True
 
     def _on_close(self, class_obj, status_code, message):
-        print("relay.py on_close")
+        print("relay.py on_close {}".format(self.url))
         self.connected = False
         pass
 
     def _on_message(self, class_obj, message: str):
-        print(f"relay.py _on_message received message of length {len(message)}: {message[:360]}...")
+        print("relay.py _on_message {} received message of length {}: {}...".format(
+            self.url, len(message), message[:360]))
         if self._is_valid_message(message):
             self.num_received_events += 1
             self.message_pool.add_message(message, self.url)
@@ -137,35 +139,42 @@ class Relay:
         print("relay.py got error for {}: {!r}".format(self.url, error))
         self.connected = False
         self.error_counter += 1
-        if self.error_threshold and self.error_counter > self.error_threshold:
-            pass
-        else:
-            self.check_reconnect()
+        # Reconnection is handled by the WebSocketApp itself (reconnect=5),
+        # so Relay no longer needs to spawn a second reconnect loop here.
 
     def _on_ping(self, class_obj, message):
-        print("relay.py on_ping")
+        print("relay.py on_ping {}".format(self.url))
         return
 
     def _on_pong(self, class_obj, message):
-        print("relay.py on_pong")
+        print("relay.py on_pong {}".format(self.url))
         return
 
     def _is_valid_message(self, message: str) -> bool:
         message = message.strip("\n")
         if not message or message[0] != "[" or message[-1] != "]":
+            print("relay.py _is_valid_message {}: malformed frame".format(self.url))
             return False
 
-        message_json = json.loads(message)
+        try:
+            message_json = json.loads(message)
+        except Exception as e:
+            print("relay.py _is_valid_message {}: JSON parse error: {}".format(self.url, e))
+            return False
+
         message_type = message_json[0]
         if not RelayMessageType.is_valid(message_type):
+            print("relay.py _is_valid_message {}: unknown message type {}".format(self.url, message_type))
             return False
         if message_type == RelayMessageType.EVENT:
             if not len(message_json) == 3:
+                print("relay.py _is_valid_message {}: EVENT length {}".format(self.url, len(message_json)))
                 return False
 
             subscription_id = message_json[1]
             with self.lock:
                 if subscription_id not in self.subscriptions:
+                    print("relay.py _is_valid_message {}: unknown subscription {}".format(self.url, subscription_id))
                     return False
 
             e = message_json[2]
@@ -178,12 +187,16 @@ class Relay:
                 e["sig"],
             )
             if not event.verify():
+                print("relay.py _is_valid_message {}: signature verification failed for event {}".format(
+                    self.url, event.id))
                 return False
 
             with self.lock:
                 subscription = self.subscriptions[subscription_id]
 
             if subscription.filters and not subscription.filters.match(event):
+                print("relay.py _is_valid_message {}: event {} does not match subscription {} filters".format(
+                    self.url, event.id, subscription_id))
                 return False
 
         return True

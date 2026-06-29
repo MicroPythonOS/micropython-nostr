@@ -183,9 +183,6 @@ def make_nip17_messages(
         if r not in seen:
             seen.add(r)
             deduped.append(r)
-    own = private_key.public_key.hex()
-    if own not in seen:
-        deduped.append(own)
     recipients = deduped
 
     if created_at is None:

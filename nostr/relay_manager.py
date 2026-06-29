@@ -88,3 +88,14 @@ class RelayManager:
             elif relay.error_counter > 0:
                 nrconnected += 1
         return nrconnected
+
+    def connection_summary(self):
+        """Return (connected_urls, disconnected_urls) for diagnostics."""
+        connected = []
+        disconnected = []
+        for url, relay in self.relays.items():
+            if relay.connected:
+                connected.append(url)
+            else:
+                disconnected.append(url)
+        return connected, disconnected
