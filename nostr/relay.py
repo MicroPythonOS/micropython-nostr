@@ -62,8 +62,8 @@ class Relay:
                     http_proxy_host=None if proxy is None else proxy.get("host"),
                     http_proxy_port=None if proxy is None else proxy.get("port"),
                     proxy_type=None if proxy is None else proxy.get("type"),
-                    ping_interval=5,
-                    reconnect=5,
+                    ping_interval=15,
+                    reconnect=30,
                     )
             except Exception as e:
                 print(f"relay.py connect self.ws.run_forever got exception: {e}")
@@ -139,7 +139,7 @@ class Relay:
         print("relay.py got error for {}: {!r}".format(self.url, error))
         self.connected = False
         self.error_counter += 1
-        # Reconnection is handled by the WebSocketApp itself (reconnect=5),
+        # Reconnection is handled by the WebSocketApp itself (reconnect=30),
         # so Relay no longer needs to spawn a second reconnect loop here.
 
     def _on_ping(self, class_obj, message):
