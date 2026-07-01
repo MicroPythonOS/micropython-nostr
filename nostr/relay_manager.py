@@ -1,5 +1,6 @@
 import uasyncio as asyncio
 import json
+import logging
 import time
 
 from .event import Event
@@ -7,6 +8,8 @@ from .filter import Filters
 from .message_pool import MessagePool
 from .message_type import ClientMessageType
 from .relay import Relay, RelayPolicy
+
+logger = logging.getLogger(__name__)
 
 
 class RelayException(Exception):
@@ -38,22 +41,23 @@ class RelayManager:
 
     async def open_connections(self, ssl_options: dict = None, proxy: dict = None):
         for relay in self.relays.values():
-            print("starting relay.connect task...")
+            logger.info("relay connecting task %s", relay.url)
             self.connected = False
             relay.task = asyncio.create_task(relay.connect(ssl_options, proxy))
 
     async def close_connections(self):
         for relay in self.relays.values():
-            print(f"closing relay {relay.url}")
+            logger.info("closing relay %s", relay.url)
             try:
                 await relay.close()
             except Exception as e:
-                print(f"relay_manager.py close_connections relay.close() got exception: {e}")
-            print(f"closed relay {relay.url}, now cancelling task...")
+                logger.error("relay close %s exception: %s", relay.url, e)
+            logger.info("closed relay %s, cancelling task", relay.url)
             relay.task.cancel()
 
     def publish_message(self, message: str):
-        print(f"publishing message to relays: {self.relays}")
+        if __debug__:
+            logger.debug("publishing message to %s relay(s)", len(self.relays))
         for relay in self.relays.values():
             if relay.policy.should_write and relay.connected:
                 relay.publish(message)
@@ -73,11 +77,7 @@ class RelayManager:
         nrconnected = 0
         for relay in self.relays.values():
             if relay.connected is True:
-                #print(f"connected: {relay.url}")
                 nrconnected += 1
-            else:
-                pass
-                #print(f"not connected: {relay.url}")
         return nrconnected
 
     def connected_or_errored_relays(self):
