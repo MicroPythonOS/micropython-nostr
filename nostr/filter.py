@@ -35,6 +35,7 @@ class Filter:
             str
         ] = None,  # The "#p" attr; list of pubkeys referenced in a "p" tag
         limit: int = None,
+        search: str = None,  # NIP-50 text search
     ) -> None:
         self.event_ids = event_ids
         self.kinds = kinds
@@ -44,6 +45,7 @@ class Filter:
         self.event_refs = event_refs
         self.pubkey_refs = pubkey_refs
         self.limit = limit
+        self.search = search
 
         self.tags = {}
         if self.event_refs:
@@ -114,6 +116,8 @@ class Filter:
             res["until"] = self.until
         if self.limit is not None:
             res["limit"] = self.limit
+        if self.search is not None:
+            res["search"] = self.search
         if self.tags:
             res.update(self.tags)
 
