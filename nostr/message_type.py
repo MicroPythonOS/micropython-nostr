@@ -8,6 +8,7 @@ class RelayMessageType:
     NOTICE = "NOTICE"
     END_OF_STORED_EVENTS = "EOSE"
     OK = "OK"
+    CLOSED = "CLOSED"
 
     @staticmethod
     def is_valid(type: str) -> bool:
@@ -16,4 +17,5 @@ class RelayMessageType:
             RelayMessageType.NOTICE,
             RelayMessageType.END_OF_STORED_EVENTS,
             RelayMessageType.OK,
+            RelayMessageType.CLOSED,
         )

@@ -32,12 +32,20 @@ class OkMessage:
         self.url = url
 
 
+class ClosedMessage:
+    def __init__(self, subscription_id: str, reason: str, url: str) -> None:
+        self.subscription_id = subscription_id
+        self.reason = reason
+        self.url = url
+
+
 class MessagePool:
     def __init__(self) -> None:
         self.events: Queue[EventMessage] = Queue()
         self.notices: Queue[NoticeMessage] = Queue()
         self.eose_notices: Queue[EndOfStoredEventsMessage] = Queue()
         self.ok_messages: Queue[OkMessage] = Queue()
+        self.closed_messages: Queue[ClosedMessage] = Queue()
         self._unique_events: set = set()
         self.lock: Lock = Lock()
 
@@ -68,6 +76,12 @@ class MessagePool:
     def has_ok_messages(self):
         return self.ok_messages.qsize() > 0
 
+    def get_closed_message(self):
+        return self.closed_messages.get()
+
+    def has_closed_messages(self):
+        return self.closed_messages.qsize() > 0
+
     def _process_message(self, message: str, url: str):
         message_json = json.loads(message)
         message_type = message_json[0]
@@ -94,4 +108,8 @@ class MessagePool:
         elif message_type == RelayMessageType.OK:
             self.ok_messages.put(
                 OkMessage(message_json[1], message_json[2], message_json[3], url)
+            )
+        elif message_type == RelayMessageType.CLOSED:
+            self.closed_messages.put(
+                ClosedMessage(message_json[1], message_json[2], url)
             )
