@@ -144,7 +144,11 @@ class Relay:
         # Include the error detail + relay URL so a failure is actionable
         # from logs alone — without this, downstream debugging had to
         # resort to patching the library to surface the exception type.
-        logger.error("relay error %s: %s", self.url, error)
+        # ponytail: INFO not ERROR — background reconnect failures pollute the
+        # REPL with ERROR output, which breaks file transfers and other
+        # REPL-driven tooling. The reconnection loop handles these transient
+        # failures silently at the protocol level.
+        logger.info("relay error %s: %s", self.url, error)
         self.connected = False
         self.error_counter += 1
         # Reconnection is handled by the WebSocketApp itself (reconnect=30),
