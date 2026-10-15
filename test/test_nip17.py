@@ -145,5 +145,63 @@ class TestTimestampTweaking(unittest.TestCase):
         self.assertTrue(decrypted["created_at"] >= before)
 
 
+def _recipient_of(gift):
+    for tag in gift["tags"]:
+        if tag and tag[0] == "p":
+            return tag[1]
+    return None
+
+
+class TestSenderWrap(unittest.TestCase):
+    """NIP-17: messages 'must be sealed (`kind:13`) and then gift-wrapped
+    (`kind:1059`) to each receiver and the sender individually.'"""
+
+    def setUp(self):
+        self.sender = PrivateKey(_SENDER_SECRET)
+        self.own_hex = self.sender.public_key.hex()
+        self.receivers = [PrivateKey() for _ in range(3)]
+        self.receiver_hex = [r.public_key.hex() for r in self.receivers]
+
+    def test_messages_include_a_wrap_addressed_to_the_sender(self):
+        gifts = make_nip17_messages(self.sender, "hi", self.receiver_hex, created_at=1700000000)
+        self.assertEqual(len(gifts), len(self.receiver_hex) + 1)
+        # Recipients first, in order; the sender's copy last.
+        self.assertEqual([_recipient_of(g) for g in gifts], self.receiver_hex + [self.own_hex])
+
+    def test_sender_wrap_decrypts_for_sender_without_a_self_p_tag(self):
+        gifts = make_nip17_messages(
+            self.sender, "room talk", self.receiver_hex, subject="room", created_at=1700000000
+        )
+        rumor = decrypt_gift_wrap_to_rumor(gifts[-1], self.sender)
+        self.assertEqual(rumor["content"], "room talk")
+        self.assertEqual(rumor["pubkey"], self.own_hex)
+        p_tags = [t[1] for t in rumor["tags"] if t[0] == "p"]
+        self.assertEqual(p_tags, self.receiver_hex)
+        self.assertEqual([t[1] for t in rumor["tags"] if t[0] == "subject"], ["room"])
+
+    def test_all_wraps_carry_the_same_rumor(self):
+        gifts = make_nip17_messages(self.sender, "same", self.receiver_hex, created_at=1700000000)
+        ids = set()
+        for gift, key in zip(gifts, self.receivers + [self.sender]):
+            ids.add(decrypt_gift_wrap_to_rumor(gift, key)["id"])
+        self.assertEqual(len(ids), 1)
+
+    def test_no_extra_wrap_when_sender_is_already_a_recipient(self):
+        gifts = make_nip17_messages(
+            self.sender, "note to self", [self.own_hex, self.receiver_hex[0]], created_at=1700000000
+        )
+        self.assertEqual([_recipient_of(g) for g in gifts], [self.own_hex, self.receiver_hex[0]])
+        rumor = decrypt_gift_wrap_to_rumor(gifts[0], self.sender)
+        self.assertEqual(
+            [t[1] for t in rumor["tags"] if t[0] == "p"], [self.own_hex, self.receiver_hex[0]]
+        )
+
+    def test_include_sender_can_be_disabled(self):
+        gifts = make_nip17_messages(
+            self.sender, "hi", self.receiver_hex, created_at=1700000000, include_sender=False
+        )
+        self.assertEqual([_recipient_of(g) for g in gifts], self.receiver_hex)
+
+
 if __name__ == "__main__":
     unittest.main()

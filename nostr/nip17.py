@@ -201,9 +201,22 @@ def make_gift_wrap(recipient_public_key_hex, seal, created_at=None):
 
 
 def make_nip17_messages(
-    private_key, content, recipients, subject=None, reply_to=None, created_at=None
+    private_key,
+    content,
+    recipients,
+    subject=None,
+    reply_to=None,
+    created_at=None,
+    include_sender=True,
 ):
-    """Create a gift-wrap event for each recipient.
+    """Create a gift-wrap event for each recipient and one for the sender.
+
+    NIP-17: the rumor "must be sealed (`kind:13`) and then gift-wrapped
+    (`kind:1059`) to each receiver and the sender individually". The
+    sender's copy comes last and is addressed to the sender's own pubkey
+    without adding a `p` tag for it to the rumor, so the sender's other
+    clients see the message too and the chat room (pubkey + `p` tags) is
+    unchanged. Pass include_sender=False to skip it.
 
     Returns a list of normalized Event-compatible dicts that can be published
     directly to relays.
@@ -239,5 +252,12 @@ def make_nip17_messages(
             private_key, dict(rumor), recipient, created_at=tweaked_timestamp(created_at)
         )
         gift = make_gift_wrap(recipient, seal, created_at=tweaked_timestamp(created_at))
+        messages.append(gift)
+    own_hex = private_key.public_key.hex()
+    if include_sender and own_hex not in seen:
+        seal = make_seal(
+            private_key, dict(rumor), own_hex, created_at=tweaked_timestamp(created_at)
+        )
+        gift = make_gift_wrap(own_hex, seal, created_at=tweaked_timestamp(created_at))
         messages.append(gift)
     return messages

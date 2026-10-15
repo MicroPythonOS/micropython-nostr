@@ -159,6 +159,28 @@ The resulting delegation tag can be stored as plaintext and reused as-is by the 
 Hopefully clients will include an optional field to store the delegation tag. That would allow the "delegatee" PK to seamlessly post messages on the "identity" key's behalf, while the "identity" key stays safely offline in cold storage.
 
 
+**NIP-17 private messages and chat rooms**
+```python
+from nostr.key import PrivateKey
+from nostr.nip17 import decrypt_gift_wrap_to_rumor, make_nip17_messages
+
+sender = PrivateKey()
+members = ["<hex pubkey>", "<hex pubkey>"]  # NIP-17 suggests at most 10 participants
+
+# One kind 14 rumor (with its NIP-01 id) for the whole room, sealed (kind 13) and
+# gift-wrapped (kind 1059) once per member and once more for the sender, so the
+# sender's other clients see the message too. Seal and gift-wrap timestamps are
+# backdated independently by up to two days (NIP-59); the rumor keeps the real time.
+wraps = make_nip17_messages(sender, "hello room", members, subject="Weekend plans")
+for wrap in wraps:
+    print(wrap["id"], wrap["tags"])  # one 'p' tag each: the member (or the sender) it is addressed to
+    # publish each wrap as an Event (see "Publish to relays" above)
+
+# Receiving: a kind 1059 event whose 'p' tag is our pubkey
+rumor = decrypt_gift_wrap_to_rumor(wrap_dict, our_private_key)
+print(rumor["content"], rumor["tags"])
+```
+
 ## Installation
 ```bash
 pip install nostr
