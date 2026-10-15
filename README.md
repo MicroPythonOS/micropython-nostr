@@ -168,12 +168,14 @@ sender = PrivateKey()
 members = ["<hex pubkey>", "<hex pubkey>"]  # NIP-17 suggests at most 10 participants
 
 # One kind 14 rumor (with its NIP-01 id) for the whole room, sealed (kind 13) and
-# gift-wrapped (kind 1059) once per member and once more for the sender, so the
+# gift-wrapped (kind 1059) once for the sender and once per member, so the
 # sender's other clients see the message too. Seal and gift-wrap timestamps are
 # backdated independently by up to two days (NIP-59); the rumor keeps the real time.
 wraps = make_nip17_messages(sender, "hello room", members, subject="Weekend plans")
+# wraps[0] is addressed to the sender: store your local copy of the message under
+# wraps[0]["id"] and the relay's echo of it deduplicates. Then one wrap per member.
 for wrap in wraps:
-    print(wrap["id"], wrap["tags"])  # one 'p' tag each: the member (or the sender) it is addressed to
+    print(wrap["id"], wrap["tags"])  # one 'p' tag each: the pubkey it is addressed to
     # publish each wrap as an Event (see "Publish to relays" above)
 
 # Receiving: a kind 1059 event whose 'p' tag is our pubkey

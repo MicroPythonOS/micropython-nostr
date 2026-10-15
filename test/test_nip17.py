@@ -56,7 +56,7 @@ class TestRumorId(unittest.TestCase):
         gifts = make_nip17_messages(
             self.sender, "hi there", [receiver.public_key.hex()], created_at=1700000000
         )
-        rumor = decrypt_gift_wrap_to_rumor(gifts[0], receiver)
+        rumor = decrypt_gift_wrap_to_rumor(gifts[-1], receiver)
         self.assertEqual(
             rumor.get("id"),
             Event.compute_id(
@@ -84,12 +84,13 @@ class TestTimestampTweaking(unittest.TestCase):
         gifts = make_nip17_messages(
             self.sender, "when", self.receiver_hex[:1], created_at=self.now
         )
-        rumor = decrypt_gift_wrap_to_rumor(gifts[0], self.receivers[0])
+        rumor = decrypt_gift_wrap_to_rumor(gifts[-1], self.receivers[0])
         self.assertEqual(rumor["created_at"], self.now)
 
     def test_seal_and_wrap_are_backdated_up_to_two_days(self):
         gifts = make_nip17_messages(
-            self.sender, "when", self.receiver_hex, created_at=self.now
+            self.sender, "when", self.receiver_hex, created_at=self.now,
+            include_sender=False,
         )
         for gift, receiver in zip(gifts, self.receivers):
             seal = self._seal_of(gift, receiver)
@@ -99,7 +100,8 @@ class TestTimestampTweaking(unittest.TestCase):
 
     def test_seal_and_wrap_timestamps_are_independent(self):
         gifts = make_nip17_messages(
-            self.sender, "when", self.receiver_hex, created_at=self.now
+            self.sender, "when", self.receiver_hex, created_at=self.now,
+            include_sender=False,
         )
         wrap_ts = [g["created_at"] for g in gifts]
         seal_ts = [self._seal_of(g, r)["created_at"] for g, r in zip(gifts, self.receivers)]
@@ -162,17 +164,18 @@ class TestSenderWrap(unittest.TestCase):
         self.receivers = [PrivateKey() for _ in range(3)]
         self.receiver_hex = [r.public_key.hex() for r in self.receivers]
 
-    def test_messages_include_a_wrap_addressed_to_the_sender(self):
+    def test_messages_start_with_a_wrap_addressed_to_the_sender(self):
         gifts = make_nip17_messages(self.sender, "hi", self.receiver_hex, created_at=1700000000)
         self.assertEqual(len(gifts), len(self.receiver_hex) + 1)
-        # Recipients first, in order; the sender's copy last.
-        self.assertEqual([_recipient_of(g) for g in gifts], self.receiver_hex + [self.own_hex])
+        # The sender's copy first (callers key their local copy on gifts[0]),
+        # then the recipients in order.
+        self.assertEqual([_recipient_of(g) for g in gifts], [self.own_hex] + self.receiver_hex)
 
     def test_sender_wrap_decrypts_for_sender_without_a_self_p_tag(self):
         gifts = make_nip17_messages(
             self.sender, "room talk", self.receiver_hex, subject="room", created_at=1700000000
         )
-        rumor = decrypt_gift_wrap_to_rumor(gifts[-1], self.sender)
+        rumor = decrypt_gift_wrap_to_rumor(gifts[0], self.sender)
         self.assertEqual(rumor["content"], "room talk")
         self.assertEqual(rumor["pubkey"], self.own_hex)
         p_tags = [t[1] for t in rumor["tags"] if t[0] == "p"]
@@ -182,18 +185,18 @@ class TestSenderWrap(unittest.TestCase):
     def test_all_wraps_carry_the_same_rumor(self):
         gifts = make_nip17_messages(self.sender, "same", self.receiver_hex, created_at=1700000000)
         ids = set()
-        for gift, key in zip(gifts, self.receivers + [self.sender]):
+        for gift, key in zip(gifts, [self.sender] + self.receivers):
             ids.add(decrypt_gift_wrap_to_rumor(gift, key)["id"])
         self.assertEqual(len(ids), 1)
 
     def test_no_extra_wrap_when_sender_is_already_a_recipient(self):
         gifts = make_nip17_messages(
-            self.sender, "note to self", [self.own_hex, self.receiver_hex[0]], created_at=1700000000
+            self.sender, "note to self", [self.receiver_hex[0], self.own_hex], created_at=1700000000
         )
-        self.assertEqual([_recipient_of(g) for g in gifts], [self.own_hex, self.receiver_hex[0]])
-        rumor = decrypt_gift_wrap_to_rumor(gifts[0], self.sender)
+        self.assertEqual([_recipient_of(g) for g in gifts], [self.receiver_hex[0], self.own_hex])
+        rumor = decrypt_gift_wrap_to_rumor(gifts[1], self.sender)
         self.assertEqual(
-            [t[1] for t in rumor["tags"] if t[0] == "p"], [self.own_hex, self.receiver_hex[0]]
+            [t[1] for t in rumor["tags"] if t[0] == "p"], [self.receiver_hex[0], self.own_hex]
         )
 
     def test_include_sender_can_be_disabled(self):

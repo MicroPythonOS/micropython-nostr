@@ -209,14 +209,16 @@ def make_nip17_messages(
     created_at=None,
     include_sender=True,
 ):
-    """Create a gift-wrap event for each recipient and one for the sender.
+    """Create a gift-wrap event for the sender and one for each recipient.
 
     NIP-17: the rumor "must be sealed (`kind:13`) and then gift-wrapped
     (`kind:1059`) to each receiver and the sender individually". The
-    sender's copy comes last and is addressed to the sender's own pubkey
-    without adding a `p` tag for it to the rumor, so the sender's other
-    clients see the message too and the chat room (pubkey + `p` tags) is
-    unchanged. Pass include_sender=False to skip it.
+    sender's copy comes FIRST, so a client that keys its local copy of the
+    message on `messages[0]["id"]` deduplicates the relay echo of that wrap.
+    It is addressed to the sender's own pubkey without adding a `p` tag for
+    it to the rumor, so the sender's other clients see the message too and
+    the chat room (pubkey + `p` tags) is unchanged. Pass include_sender=False
+    to skip it (the result then starts with the first recipient's wrap).
 
     Returns a list of normalized Event-compatible dicts that can be published
     directly to relays.
@@ -243,21 +245,19 @@ def make_nip17_messages(
         reply_to=reply_to,
         created_at=created_at,
     )
+    own_hex = private_key.public_key.hex()
+    targets = []
+    if include_sender and own_hex not in seen:
+        targets.append(own_hex)
+    targets.extend(recipients)
     messages = []
-    for recipient in recipients:
+    for target in targets:
         # The rumor keeps the real `created_at`; the seal and the gift wrap
         # each get an independent backdated timestamp so the N wraps of one
         # message are not linkable by time.
         seal = make_seal(
-            private_key, dict(rumor), recipient, created_at=tweaked_timestamp(created_at)
+            private_key, dict(rumor), target, created_at=tweaked_timestamp(created_at)
         )
-        gift = make_gift_wrap(recipient, seal, created_at=tweaked_timestamp(created_at))
-        messages.append(gift)
-    own_hex = private_key.public_key.hex()
-    if include_sender and own_hex not in seen:
-        seal = make_seal(
-            private_key, dict(rumor), own_hex, created_at=tweaked_timestamp(created_at)
-        )
-        gift = make_gift_wrap(own_hex, seal, created_at=tweaked_timestamp(created_at))
+        gift = make_gift_wrap(target, seal, created_at=tweaked_timestamp(created_at))
         messages.append(gift)
     return messages
