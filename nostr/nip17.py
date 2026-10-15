@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import secrets
 import time
 
 from nostr.event import Event
@@ -14,6 +15,26 @@ logger = logging.getLogger(__name__)
 KIND_NIP17_CHAT = 14
 KIND_NIP17_GIFT_WRAP = 1059
 KIND_NIP17_SEAL = 13
+
+# NIP-17: "Clients SHOULD randomize `created_at` in up to two days in the
+# past in both the seal and the gift wrap".
+TWO_DAYS = 2 * 24 * 60 * 60
+
+
+def tweaked_timestamp(now=None):
+    """Return a timestamp up to TWO_DAYS before `now` (default: current time).
+
+    NIP-59: "All other timestamps SHOULD be tweaked to thwart time-analysis
+    attacks" and "all timestamps SHOULD be in the past". Each call draws an
+    independent offset, so the seal and the gift wrap of one message carry
+    different timestamps.
+    """
+    if now is None:
+        now = int(time.time())
+    # token_bytes rather than secrets.randbelow: the MicroPython secrets
+    # shim's randbelow needs int.bit_length, which MicroPython lacks.
+    offset = int.from_bytes(secrets.token_bytes(4), "big") % (TWO_DAYS + 1)
+    return now - offset
 
 
 def _get_tag(event, name):
@@ -116,10 +137,14 @@ def make_rumor(
 
 
 def make_seal(private_key, rumor, recipient_public_key_hex, created_at=None):
-    """Return a signed kind 13 seal event dict addressed to `recipient`."""
+    """Return a signed kind 13 seal event dict addressed to `recipient`.
+
+    `created_at` defaults to a randomly backdated timestamp (NIP-59); the
+    rumor keeps its own canonical timestamp.
+    """
     if created_at is None:
-        created_at = int(time.time())
-    rumor.setdefault("created_at", created_at)
+        created_at = tweaked_timestamp()
+    rumor.setdefault("created_at", int(time.time()))
     clear_text = json.dumps(rumor, separators=(",", ":"))
     conv_key = get_conversation_key(private_key, recipient_public_key_hex)
     ciphertext = nip44_encrypt(clear_text, conv_key)
@@ -144,9 +169,12 @@ def make_seal(private_key, rumor, recipient_public_key_hex, created_at=None):
 
 
 def make_gift_wrap(recipient_public_key_hex, seal, created_at=None):
-    """Return a kind 1059 gift-wrap event dict addressed to the recipient."""
+    """Return a kind 1059 gift-wrap event dict addressed to the recipient.
+
+    `created_at` defaults to a randomly backdated timestamp (NIP-59).
+    """
     if created_at is None:
-        created_at = int(time.time())
+        created_at = tweaked_timestamp()
     wrapper = PrivateKey()
     clear_text = json.dumps(seal, separators=(",", ":"))
     conv_key = get_conversation_key(wrapper, recipient_public_key_hex)
@@ -204,7 +232,12 @@ def make_nip17_messages(
     )
     messages = []
     for recipient in recipients:
-        seal = make_seal(private_key, dict(rumor), recipient, created_at=created_at)
-        gift = make_gift_wrap(recipient, seal, created_at=created_at)
+        # The rumor keeps the real `created_at`; the seal and the gift wrap
+        # each get an independent backdated timestamp so the N wraps of one
+        # message are not linkable by time.
+        seal = make_seal(
+            private_key, dict(rumor), recipient, created_at=tweaked_timestamp(created_at)
+        )
+        gift = make_gift_wrap(recipient, seal, created_at=tweaked_timestamp(created_at))
         messages.append(gift)
     return messages
