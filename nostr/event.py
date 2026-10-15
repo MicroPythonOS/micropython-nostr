@@ -8,6 +8,15 @@ from hashlib import sha256
 
 from .message_type import ClientMessageType
 
+# CPython's json.dumps escapes non-ASCII unless ensure_ascii=False; MicroPython's
+# emits raw UTF-8 and rejects the keyword. Probe once so Event ids hash the
+# NIP-01 canonical bytes on both.
+try:
+    json.dumps("", ensure_ascii=False)
+    _JSON_DUMPS_KWARGS = {"ensure_ascii": False}
+except TypeError:
+    _JSON_DUMPS_KWARGS = {}
+
 
 class EventKind(IntEnum):
     SET_METADATA = 0
@@ -59,8 +68,10 @@ class Event:
         public_key: str, created_at: int, kind: int, tags: List[List[str]], content: str
     ) -> bytes:
         data = [0, public_key, created_at, kind, tags, content]
-        #data_str = json.dumps(data, separators=(",", ":"), ensure_ascii=False) # ensure_ascii not supported on micropython
-        data_str = json.dumps(data, separators=(",", ":"))
+        # NIP-01: the id is the hash of the UTF-8 JSON with no escaping of
+        # non-ASCII characters. MicroPython's json.dumps already emits raw
+        # UTF-8 (and has no ensure_ascii); CPython escapes unless told not to.
+        data_str = json.dumps(data, separators=(",", ":"), **_JSON_DUMPS_KWARGS)
         return data_str.encode()
 
     @staticmethod
