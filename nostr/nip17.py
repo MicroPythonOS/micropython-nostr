@@ -2,7 +2,6 @@ import base64
 import json
 import logging
 import secrets
-import time
 
 from nostr.event import Event
 from nostr.key import PrivateKey
@@ -28,9 +27,12 @@ def tweaked_timestamp(now=None):
     attacks" and "all timestamps SHOULD be in the past". Each call draws an
     independent offset, so the seal and the gift wrap of one message carry
     different timestamps.
+
+    `now` defaults to Event.epoch_seconds(), the Unix time every Nostr
+    timestamp needs; a raw time.time() counts from 2000 on the ESP32 port.
     """
     if now is None:
-        now = int(time.time())
+        now = int(Event.epoch_seconds())
     # token_bytes rather than secrets.randbelow: the MicroPython secrets
     # shim's randbelow needs int.bit_length, which MicroPython lacks.
     offset = int.from_bytes(secrets.token_bytes(4), "big") % (TWO_DAYS + 1)
@@ -123,7 +125,7 @@ def make_rumor(
         tags.append(["e", reply_to])
     pubkey = private_key.public_key.hex()
     if created_at is None:
-        created_at = int(time.time())
+        created_at = int(Event.epoch_seconds())
     # NIP-17: "Fields `id` and `created_at` are required." The id is the
     # NIP-01 hash of the unsigned event; clients key their storage on it.
     return {
@@ -144,7 +146,7 @@ def make_seal(private_key, rumor, recipient_public_key_hex, created_at=None):
     """
     if created_at is None:
         created_at = tweaked_timestamp()
-    rumor.setdefault("created_at", int(time.time()))
+    rumor.setdefault("created_at", int(Event.epoch_seconds()))
     clear_text = json.dumps(rumor, separators=(",", ":"))
     conv_key = get_conversation_key(private_key, recipient_public_key_hex)
     ciphertext = nip44_encrypt(clear_text, conv_key)
@@ -220,6 +222,11 @@ def make_nip17_messages(
     the chat room (pubkey + `p` tags) is unchanged. Pass include_sender=False
     to skip it (the result then starts with the first recipient's wrap).
 
+    The rumor keeps the real `created_at`; every seal and gift wrap gets its
+    own timestamp backdated from now by up to two days, so the N wraps of one
+    message are not linkable by time and a message replayed from a queue is
+    not dated before the window relays and subscriptions keep.
+
     Returns a list of normalized Event-compatible dicts that can be published
     directly to relays.
     """
@@ -235,7 +242,7 @@ def make_nip17_messages(
     recipients = deduped
 
     if created_at is None:
-        created_at = int(time.time())
+        created_at = int(Event.epoch_seconds())
 
     rumor = make_rumor(
         private_key,
@@ -252,12 +259,7 @@ def make_nip17_messages(
     targets.extend(recipients)
     messages = []
     for target in targets:
-        # The rumor keeps the real `created_at`; the seal and the gift wrap
-        # each get an independent backdated timestamp so the N wraps of one
-        # message are not linkable by time.
-        seal = make_seal(
-            private_key, dict(rumor), target, created_at=tweaked_timestamp(created_at)
-        )
-        gift = make_gift_wrap(target, seal, created_at=tweaked_timestamp(created_at))
+        seal = make_seal(private_key, dict(rumor), target, created_at=tweaked_timestamp())
+        gift = make_gift_wrap(target, seal, created_at=tweaked_timestamp())
         messages.append(gift)
     return messages
