@@ -100,12 +100,18 @@ def make_rumor(
         tags.append(["subject", subject])
     if reply_to:
         tags.append(["e", reply_to])
+    pubkey = private_key.public_key.hex()
+    if created_at is None:
+        created_at = int(time.time())
+    # NIP-17: "Fields `id` and `created_at` are required." The id is the
+    # NIP-01 hash of the unsigned event; clients key their storage on it.
     return {
+        "id": Event.compute_id(pubkey, created_at, KIND_NIP17_CHAT, tags, content),
         "kind": KIND_NIP17_CHAT,
         "content": content,
         "tags": tags,
-        "pubkey": private_key.public_key.hex(),
-        "created_at": created_at if created_at is not None else int(time.time()),
+        "pubkey": pubkey,
+        "created_at": created_at,
     }
 
 
