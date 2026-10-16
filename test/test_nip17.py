@@ -423,9 +423,14 @@ class TestSealSignature(unittest.TestCase):
         self._assert_rejected(self.seal)
 
     def test_seal_with_invalid_author_key_is_rejected_with_value_error(self):
+        # Off the curve, not hex, too short. The id is recomputed so each
+        # case reaches the signature check, where secp256k1 raises a bare
+        # Exception for the first and last.
         for pubkey in ("00" * 32, "zz" * 32, "ab"):
             seal = dict(self.seal)
             seal["pubkey"] = pubkey
+            seal["id"] = Event.compute_id(pubkey, seal["created_at"], seal["kind"],
+                                          seal["tags"], seal["content"])
             self._assert_rejected(seal)
 
 
