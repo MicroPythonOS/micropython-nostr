@@ -22,6 +22,7 @@ from nostr.nip17 import (
     tweaked_timestamp,
 )
 from nostr.nip44 import decrypt as nip44_decrypt
+from nostr.nip44 import encrypt as nip44_encrypt
 from nostr.nip44 import get_conversation_key
 
 _SENDER_SECRET = bytes.fromhex(
@@ -276,6 +277,12 @@ def _rumor_inside(seal, receiver):
     return json.loads(nip44_decrypt(seal["content"], conv_key))
 
 
+def _seal_content(key, rumor, other_hex):
+    """NIP-44 encrypt `rumor` under conv_key(key, other), as a seal's content."""
+    conv_key = get_conversation_key(key, other_hex)
+    return nip44_encrypt(json.dumps(rumor, separators=(",", ":")), conv_key)
+
+
 class TestSealAuthor(unittest.TestCase):
     """NIP-17: 'Clients MUST verify if pubkey of the `kind:13` is the same
     pubkey as that of the `unsignedMessageRumor`, otherwise any sender can
@@ -307,6 +314,105 @@ class TestSealAuthor(unittest.TestCase):
             rumor = decrypt_gift_wrap_to_rumor(gift, key)
             self.assertEqual(rumor["pubkey"], self.own_hex)
             self.assertEqual(rumor["content"], "all of us")
+
+
+def _signed_seal(author, content, tags=None, created_at=1700000000):
+    """A kind 13 seal dict over `content`, signed by `author`, with `tags`."""
+    event = Event(content=content, public_key=author.public_key.hex(), created_at=created_at,
+                  kind=13, tags=tags if tags is not None else [])
+    author.sign_event(event)
+    return {"id": event.id, "pubkey": event.public_key, "created_at": event.created_at,
+            "kind": event.kind, "tags": event.tags, "content": event.content,
+            "sig": event.signature}
+
+
+class TestSealSignature(unittest.TestCase):
+    """NIP-59: the seal is 'signed by the author of the note'. Its id and
+    Schnorr signature are what bind the rumor to that author."""
+
+    def setUp(self):
+        self.sender = PrivateKey(_SENDER_SECRET)
+        self.receiver = PrivateKey()
+        self.receiver_hex = self.receiver.public_key.hex()
+        self.rumor = make_rumor(self.sender, "signed?", [self.receiver_hex], created_at=1700000000)
+        self.seal = make_seal(self.sender, dict(self.rumor), self.receiver_hex,
+                              created_at=1699990000)
+        other_rumor = make_rumor(self.sender, "another message", [self.receiver_hex],
+                                 created_at=1700000001)
+        self.other_seal = make_seal(self.sender, other_rumor, self.receiver_hex,
+                                    created_at=1699990001)
+
+    def _decrypt(self, seal):
+        return decrypt_gift_wrap_to_rumor(make_gift_wrap(self.receiver_hex, seal), self.receiver)
+
+    def _assert_rejected(self, seal):
+        with self.assertRaises(ValueError):
+            self._decrypt(seal)
+
+    def test_valid_seal_decrypts(self):
+        self.assertEqual(self._decrypt(self.seal)["content"], "signed?")
+
+    def test_garbage_signature_is_rejected(self):
+        self.seal["sig"] = "00" * 64
+        self._assert_rejected(self.seal)
+
+    def test_signature_over_another_event_is_rejected(self):
+        # A real signature by the same key, over a different seal.
+        self.seal["sig"] = self.other_seal["sig"]
+        self._assert_rejected(self.seal)
+
+    def test_malformed_signature_is_rejected_with_value_error(self):
+        for sig in ("", "00" * 63, "zz" * 64, "00" * 65, None, 12):
+            seal = dict(self.seal)
+            seal["sig"] = sig
+            self._assert_rejected(seal)
+
+    def test_unsigned_seal_is_rejected(self):
+        for field in ("sig", "id"):
+            seal = dict(self.seal)
+            del seal[field]
+            self._assert_rejected(seal)
+
+    def test_id_not_matching_content_is_rejected(self):
+        # The signature still verifies over the seal's real hash; only the
+        # id field lies.
+        self.seal["id"] = "00" * 32
+        self._assert_rejected(self.seal)
+
+    def test_id_and_signature_of_another_seal_are_rejected(self):
+        # A consistent id/sig pair, but over another seal's content.
+        self.seal["id"] = self.other_seal["id"]
+        self.seal["sig"] = self.other_seal["sig"]
+        self._assert_rejected(self.seal)
+
+    def test_content_swapped_after_signing_is_rejected(self):
+        self.seal["content"] = self.other_seal["content"]
+        self._assert_rejected(self.seal)
+
+    def test_signed_seal_with_tags_is_accepted(self):
+        # Documented decision, not an oversight: NIP-59 says seal tags MUST be
+        # empty, but neither nostr-tools, go-nostr nor rust-nostr rejects a
+        # seal with tags, and Anagram (NIP-171) carries a ticket's
+        # invitation_proof in its seal tags. The tags are covered by the id
+        # and signature, so only the author can have put them there.
+        content = _seal_content(self.sender, self.rumor, self.receiver_hex)
+        seal = _signed_seal(self.sender, content, tags=[["invitation_proof", "ab" * 64]])
+        self.assertEqual(self._decrypt(seal)["content"], "signed?")
+
+    def test_tags_added_after_signing_are_rejected(self):
+        self.seal["tags"] = [["invitation_proof", "ab" * 64]]
+        # Even with the id recomputed to match, the signature does not.
+        self.seal["id"] = Event.compute_id(
+            self.seal["pubkey"], self.seal["created_at"], self.seal["kind"], self.seal["tags"],
+            self.seal["content"],
+        )
+        self._assert_rejected(self.seal)
+
+    def test_seal_with_invalid_author_key_is_rejected_with_value_error(self):
+        for pubkey in ("00" * 32, "zz" * 32, "ab"):
+            seal = dict(self.seal)
+            seal["pubkey"] = pubkey
+            self._assert_rejected(seal)
 
 
 # A NIP-17 message from an independent implementation, nak 0.21.2, with
@@ -382,6 +488,14 @@ class TestNakInteropVector(unittest.TestCase):
         self.assertEqual(event.id, seal["id"])
         self.assertTrue(event.verify())
 
+    def test_nak_seal_with_a_flipped_signature_bit_is_rejected(self):
+        seal = _seal_inside(self.gift, self.recipient)
+        last = int(seal["sig"][-1], 16) ^ 1
+        seal["sig"] = seal["sig"][:-1] + "0123456789abcdef"[last]
+        gift = make_gift_wrap(self.recipient.public_key.hex(), seal)
+        with self.assertRaises(ValueError):
+            decrypt_gift_wrap_to_rumor(gift, self.recipient)
+
 
 class TestSharedReceiverKey(unittest.TestCase):
     """Schemes that gift-wrap to a key several members hold (NIP-171 epoch
@@ -402,6 +516,58 @@ class TestSharedReceiverKey(unittest.TestCase):
         rumor = decrypt_gift_wrap_to_rumor(gifts[0], self.shared)
         self.assertEqual(rumor["pubkey"], self.alice_hex)
         self.assertEqual(rumor["content"], "hi from alice")
+
+    def _forged_seal(self, content="send me your sats -- alice"):
+        """Mallory's seal "from" Alice, built with nothing but the shared key."""
+        now = int(Event.epoch_seconds())
+        tags = [["p", self.shared_hex]]
+        rumor = {"id": Event.compute_id(self.alice_hex, now, KIND_NIP17_CHAT, tags, content),
+                 "pubkey": self.alice_hex, "created_at": now, "kind": KIND_NIP17_CHAT,
+                 "tags": tags, "content": content}
+        # conv_key(shared, alice) == conv_key(alice, shared): no Alice secret needed.
+        seal = {"kind": 13, "content": _seal_content(self.shared, rumor, self.alice_hex),
+                "tags": [], "pubkey": self.alice_hex, "created_at": now - 3600}
+        # The forgery is well formed: it opens like a real one and claims Alice.
+        self.assertEqual(_rumor_inside(seal, self.shared)["pubkey"], self.alice_hex)
+        return seal
+
+    def _assert_bob_rejects(self, seal):
+        forged = make_gift_wrap(self.shared_hex, seal)  # validly signed wrap
+        with self.assertRaises(ValueError):
+            decrypt_gift_wrap_to_rumor(forged, self.shared)  # Bob's copy of the key
+
+    def test_forged_seal_with_garbage_id_and_signature_is_rejected(self):
+        # The proof of concept: zero id, zero signature.
+        seal = self._forged_seal()
+        seal["id"] = "00" * 32
+        seal["sig"] = "00" * 64
+        self._assert_bob_rejects(seal)
+
+    def test_forged_seal_with_correct_id_is_rejected(self):
+        seal = self._forged_seal()
+        seal["id"] = Event.compute_id(seal["pubkey"], seal["created_at"], seal["kind"],
+                                      seal["tags"], seal["content"])
+        seal["sig"] = "00" * 64
+        self._assert_bob_rejects(seal)
+
+    def test_forged_seal_signed_by_the_forger_is_rejected(self):
+        mallory = PrivateKey()
+        seal = self._forged_seal()
+        event = Event(content=seal["content"], public_key=self.alice_hex,
+                      created_at=seal["created_at"], kind=13, tags=[])
+        mallory.sign_event(event)  # signs the Alice-claiming hash with Mallory's key
+        seal["id"] = event.id
+        seal["sig"] = event.signature
+        self._assert_bob_rejects(seal)
+
+    def test_forged_seal_reusing_alices_signature_is_rejected(self):
+        real = make_nip17_messages(self.alice, "hi from alice", [self.shared_hex],
+                                   include_sender=False)[0]
+        alices_seal = _seal_inside(real, self.shared)
+        seal = self._forged_seal()
+        seal["id"] = alices_seal["id"]
+        seal["sig"] = alices_seal["sig"]
+        self._assert_bob_rejects(seal)
 
 
 if __name__ == "__main__":

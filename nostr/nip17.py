@@ -67,14 +67,64 @@ def _event_dict_from_source(source):
     raise ValueError("source must be Event or dict")
 
 
+def _check_seal_signature(seal):
+    """Raise ValueError unless `seal` carries its own NIP-01 id and a valid
+    Schnorr signature by its `pubkey`.
+
+    NIP-59: the seal is "signed by the author's real key". That signature is
+    the only thing tying a rumor to its author: the NIP-44 key that opens a
+    seal is conv_key(author, receiver), which the receiver can compute as
+    well, and under a shared receiver key (NIP-171 epoch keys, Concord) so
+    can every other member, who could then seal a rumor "from" anyone.
+
+    The check is Event.verify(), as relay.py applies to every incoming event.
+    """
+    seal_id = seal.get("id")
+    signature = seal.get("sig")
+    # A BIP-340 signature is 64 bytes; anything else would only make the
+    # secp256k1 shim print a warning before failing.
+    if not isinstance(seal_id, str) or not isinstance(signature, str) or len(signature) != 128:
+        raise ValueError("unsigned or malformed seal")
+    event = Event(
+        content=seal.get("content"),
+        public_key=seal["pubkey"],
+        created_at=seal.get("created_at"),
+        kind=seal["kind"],
+        tags=seal.get("tags"),
+        signature=signature,
+    )
+    computed_id = event.id
+    if computed_id != seal_id:
+        raise ValueError("seal id does not match its content")
+    event.id = computed_id  # verify() would hash the event again otherwise
+    try:
+        valid = event.verify()
+    except Exception:  # noqa: BLE001 - secp256k1 raises bare Exception for a bad point
+        valid = False
+    if not valid:
+        raise ValueError("invalid seal signature")
+
+
 def _verify_seal(seal, receiver_private_key):
-    """Decrypt and verify a kind 13 seal event. Returns decoded rumor dict."""
+    """Verify and decrypt a kind 13 seal event. Returns decoded rumor dict.
+
+    Raises ValueError unless the seal is signed by its `pubkey` (see
+    _check_seal_signature) and the rumor inside claims that same author.
+
+    The seal's tags are NOT required to be empty, although NIP-59 says they
+    MUST be: nostr-tools, go-nostr and rust-nostr accept seals with tags,
+    and Anagram (NIP-171) carries a ticket's invitation_proof in them. The
+    id and signature cover the tags, so only the author can have set them.
+    """
     seal = _event_dict_from_source(seal)
     if seal.get("kind") != KIND_NIP17_SEAL:
         raise ValueError("invalid seal kind")
     author = seal.get("pubkey")
     if not author:
         raise ValueError("missing author")
+    # Before decrypting: a forged seal costs one signature check, not an
+    # ECDH plus a NIP-44 decryption.
+    _check_seal_signature(seal)
     conv_key = get_conversation_key(receiver_private_key, author)
     payload = nip44_decrypt(seal["content"], conv_key)
     rumor = json.loads(payload)
@@ -86,7 +136,12 @@ def _verify_seal(seal, receiver_private_key):
 def decrypt_gift_wrap_to_rumor(gift_wrap, receiver_private_key):
     """Decrypt a kind 1059/21059 gift-wrap event into the underlying rumor.
 
-    Returns the rumor as a dict, or None if decryption fails.
+    Returns the rumor as a dict; never None. Raises ValueError when the
+    wrap is not addressed to `receiver_private_key` or its seal is not
+    validly signed by the rumor's author; a wrap that does not decrypt
+    raises from the NIP-44 / secp256k1 layer. The wrap's own signature (an
+    ephemeral key's) is left to the relay layer: it says nothing about who
+    wrote the rumor.
     """
     gift_wrap = _event_dict_from_source(gift_wrap)
     if gift_wrap.get("kind") not in (KIND_NIP17_GIFT_WRAP, 21059):
