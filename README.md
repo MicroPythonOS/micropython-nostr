@@ -183,6 +183,15 @@ rumor = decrypt_gift_wrap_to_rumor(wrap_dict, our_private_key)
 print(rumor["content"], rumor["tags"])
 ```
 
+`decrypt_gift_wrap_to_rumor` returns the rumor only if its kind 13 seal is a
+signed event: the seal's `id` must be its NIP-01 hash and its Schnorr signature
+must verify against the seal's `pubkey` (the check relay.py applies to every
+incoming event), and the rumor must claim that same `pubkey`. Anything else
+raises `ValueError`, so a member of a group that shares one receiving key
+cannot post as another member. Seal tags are not required to be empty, though
+NIP-59 says they MUST be: other libraries accept them, Anagram (NIP-171) uses
+them, and the signature covers them.
+
 ## Installation
 ```bash
 pip install nostr
