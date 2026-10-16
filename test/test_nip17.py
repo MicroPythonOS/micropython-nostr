@@ -7,6 +7,7 @@ unittest (e.g. through MicroPythonOS' scripts/test_runner.py).
 
 import json
 import unittest
+from hashlib import sha256
 
 import nostr.nip17 as nip17
 from nostr.event import Event
@@ -397,6 +398,19 @@ class TestSealSignature(unittest.TestCase):
         # and signature, so only the author can have put them there.
         content = _seal_content(self.sender, self.rumor, self.receiver_hex)
         seal = _signed_seal(self.sender, content, tags=[["invitation_proof", "ab" * 64]])
+        self.assertEqual(self._decrypt(seal)["content"], "signed?")
+
+    def test_seal_signed_over_nip01_bytes_with_form_feed_tag_decrypts(self):
+        # Another client hashes the NIP-01 bytes, where 0x0C is written \f
+        # (MicroPython's json.dumps writes \u000c). Built by hand so the
+        # expected id does not depend on Event.serialize.
+        content = _seal_content(self.sender, self.rumor, self.receiver_hex)
+        tags = [["note", "page\fbreak"]]
+        author = self.sender.public_key.hex()
+        canonical = f'[0,"{author}",1699990000,13,[["note","page\\fbreak"]],"{content}"]'
+        digest = sha256(canonical.encode("utf-8")).digest()
+        seal = {"id": digest.hex(), "pubkey": author, "created_at": 1699990000, "kind": 13,
+                "tags": tags, "content": content, "sig": self.sender.sign_message_hash(digest)}
         self.assertEqual(self._decrypt(seal)["content"], "signed?")
 
     def test_tags_added_after_signing_are_rejected(self):

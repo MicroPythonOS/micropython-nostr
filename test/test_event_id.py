@@ -42,6 +42,34 @@ class TestEventId(unittest.TestCase):
         data = Event.serialize("ab", 1, 1, [["t", "\u00fc"]], "x")
         self.assertEqual(data, '[0,"ab",1,1,[["t","\u00fc"]],"x"]'.encode("utf-8"))
 
+    def test_serialize_escapes_backspace_and_form_feed_as_nip01(self):
+        # NIP-01 escapes 0x08 as \b and 0x0C as \f, as JSON.stringify and
+        # CPython do. MicroPython's json.dumps writes \u0008 and \u000c.
+        data = Event.serialize("ab", 1, 1, [["t", "x\by"]], "page\fbreak")
+        self.assertEqual(data, b'[0,"ab",1,1,[["t","x\\by"]],"page\\fbreak"]')
+
+    def test_serialize_keeps_other_escapes(self):
+        # Line break, carriage return, tab, quote and backslash have their
+        # short forms everywhere; other control characters stay \u00XX.
+        data = Event.serialize("ab", 1, 1, [], "\n\r\t\"\\\x01\x1f")
+        self.assertEqual(data, b'[0,"ab",1,1,[],"\\n\\r\\t\\"\\\\\\u0001\\u001f"]')
+
+    def test_serialize_leaves_escaped_backslash_before_u0008_text(self):
+        # A literal backslash followed by the text "u0008" is not a control
+        # character: its JSON is \\u0008 and must stay that way. Next to a
+        # real backspace, only the backspace changes.
+        data = Event.serialize("ab", 1, 1, [], "\\u0008 \\\b \\u000c")
+        self.assertEqual(data, b'[0,"ab",1,1,[],"\\\\u0008 \\\\\\b \\\\u000c"]')
+
+    def test_id_of_content_with_form_feed_is_the_nip01_hash(self):
+        pubkey = PrivateKey().public_key.hex()
+        canonical = f'[0,"{pubkey}",1700000000,14,[],"a\\fb\\bc"]'
+        self.assertEqual(
+            Event.compute_id(pubkey, 1700000000, 14, [], "a\fb\bc"),
+            # MicroPython's sha256 has no hexdigest().
+            sha256(canonical.encode("utf-8")).digest().hex(),  # noqa: FURB181
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
