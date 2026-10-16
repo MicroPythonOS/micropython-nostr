@@ -1,7 +1,8 @@
 """Event.compute_id must hash the NIP-01 canonical bytes.
 
-Plain unittest.TestCase so it runs under pytest on CPython and under
-MicroPython's unittest. Known answers come from the NIP-59 example and from
+Plain unittest.TestCase, run under MicroPython's unittest (for example
+through MicroPythonOS' scripts/test_runner.py); nostr.key imports
+secp256k1_compat, so these tests don't run on CPython yet. Known answers come from the NIP-59 example and from
 canonical bytes built by hand, so they do not depend on json.dumps.
 """
 

@@ -1,8 +1,8 @@
 """NIP-17 / NIP-59 behaviour of nostr.nip17.
 
-These tests are plain unittest.TestCase classes so they run both under
-pytest on CPython (`pytest test/test_nip17.py`) and under MicroPython's
-unittest (e.g. through MicroPythonOS' scripts/test_runner.py).
+These tests are plain unittest.TestCase classes, run under MicroPython's
+unittest (e.g. through MicroPythonOS' scripts/test_runner.py). nostr.key
+imports secp256k1_compat, so they don't run under pytest on CPython yet.
 """
 
 import json

@@ -71,7 +71,7 @@ def _check_seal_signature(seal):
     """Raise ValueError unless `seal` carries its own NIP-01 id and a valid
     Schnorr signature by its `pubkey`.
 
-    NIP-59: the seal is "signed by the author's real key". That signature is
+    NIP-59: the seal is "signed by the author of the note". That signature is
     the only thing tying a rumor to its author: the NIP-44 key that opens a
     seal is conv_key(author, receiver), which the receiver can compute as
     well, and under a shared receiver key (NIP-171 epoch keys, Concord) so

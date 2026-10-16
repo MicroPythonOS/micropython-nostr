@@ -170,7 +170,7 @@ members = ["<hex pubkey>", "<hex pubkey>"]  # NIP-17 suggests at most 10 partici
 # One kind 14 rumor (with its NIP-01 id) for the whole room, sealed (kind 13) and
 # gift-wrapped (kind 1059) once for the sender and once per member, so the
 # sender's other clients see the message too. Seal and gift-wrap timestamps are
-# backdated independently by up to two days (NIP-59); the rumor keeps the real time.
+# backdated independently by up to two days (NIP-17); the rumor keeps the real time.
 wraps = make_nip17_messages(sender, "hello room", members, subject="Weekend plans")
 # wraps[0] is addressed to the sender: store your local copy of the message under
 # wraps[0]["id"] and the relay's echo of it deduplicates. Then one wrap per member.
