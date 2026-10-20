@@ -159,6 +159,39 @@ The resulting delegation tag can be stored as plaintext and reused as-is by the 
 Hopefully clients will include an optional field to store the delegation tag. That would allow the "delegatee" PK to seamlessly post messages on the "identity" key's behalf, while the "identity" key stays safely offline in cold storage.
 
 
+**NIP-17 private messages and chat rooms**
+```python
+from nostr.key import PrivateKey
+from nostr.nip17 import decrypt_gift_wrap_to_rumor, make_nip17_messages
+
+sender = PrivateKey()
+members = ["<hex pubkey>", "<hex pubkey>"]  # NIP-17 suggests at most 10 participants
+
+# One kind 14 rumor (with its NIP-01 id) for the whole room, sealed (kind 13) and
+# gift-wrapped (kind 1059) once for the sender and once per member, so the
+# sender's other clients see the message too. Seal and gift-wrap timestamps are
+# backdated independently by up to two days (NIP-17); the rumor keeps the real time.
+wraps = make_nip17_messages(sender, "hello room", members, subject="Weekend plans")
+# wraps[0] is addressed to the sender: store your local copy of the message under
+# wraps[0]["id"] and the relay's echo of it deduplicates. Then one wrap per member.
+for wrap in wraps:
+    print(wrap["id"], wrap["tags"])  # one 'p' tag each: the pubkey it is addressed to
+    # publish each wrap as an Event (see "Publish to relays" above)
+
+# Receiving: a kind 1059 event whose 'p' tag is our pubkey
+rumor = decrypt_gift_wrap_to_rumor(wrap_dict, our_private_key)
+print(rumor["content"], rumor["tags"])
+```
+
+`decrypt_gift_wrap_to_rumor` returns the rumor only if its kind 13 seal is a
+signed event: the seal's `id` must be its NIP-01 hash and its Schnorr signature
+must verify against the seal's `pubkey` (the check relay.py applies to every
+incoming event), and the rumor must claim that same `pubkey`. Anything else
+raises `ValueError`, so a member of a group that shares one receiving key
+cannot post as another member. Seal tags are not required to be empty, though
+NIP-59 says they MUST be: other libraries accept them, Anagram (NIP-171) uses
+them, and the signature covers them.
+
 ## Installation
 ```bash
 pip install nostr

@@ -1,7 +1,7 @@
 import base64
 import json
 import logging
-import time
+import secrets
 
 from nostr.event import Event
 from nostr.key import PrivateKey
@@ -14,6 +14,29 @@ logger = logging.getLogger(__name__)
 KIND_NIP17_CHAT = 14
 KIND_NIP17_GIFT_WRAP = 1059
 KIND_NIP17_SEAL = 13
+
+# NIP-17: "Clients SHOULD randomize `created_at` in up to two days in the
+# past in both the seal and the gift wrap".
+TWO_DAYS = 2 * 24 * 60 * 60
+
+
+def tweaked_timestamp(now=None):
+    """Return a timestamp up to TWO_DAYS before `now` (default: current time).
+
+    NIP-59: "All other timestamps SHOULD be tweaked to thwart time-analysis
+    attacks" and "all timestamps SHOULD be in the past". Each call draws an
+    independent offset, so the seal and the gift wrap of one message carry
+    different timestamps.
+
+    `now` defaults to Event.epoch_seconds(), the Unix time every Nostr
+    timestamp needs; a raw time.time() counts from 2000 on the ESP32 port.
+    """
+    if now is None:
+        now = int(Event.epoch_seconds())
+    # token_bytes rather than secrets.randbelow: the MicroPython secrets
+    # shim's randbelow needs int.bit_length, which MicroPython lacks.
+    offset = int.from_bytes(secrets.token_bytes(4), "big") % (TWO_DAYS + 1)
+    return now - offset
 
 
 def _get_tag(event, name):
@@ -44,14 +67,64 @@ def _event_dict_from_source(source):
     raise ValueError("source must be Event or dict")
 
 
+def _check_seal_signature(seal):
+    """Raise ValueError unless `seal` carries its own NIP-01 id and a valid
+    Schnorr signature by its `pubkey`.
+
+    NIP-59: the seal is "signed by the author of the note". That signature is
+    the only thing tying a rumor to its author: the NIP-44 key that opens a
+    seal is conv_key(author, receiver), which the receiver can compute as
+    well, and under a shared receiver key (NIP-171 epoch keys, Concord) so
+    can every other member, who could then seal a rumor "from" anyone.
+
+    The check is Event.verify(), as relay.py applies to every incoming event.
+    """
+    seal_id = seal.get("id")
+    signature = seal.get("sig")
+    # A BIP-340 signature is 64 bytes; anything else would only make the
+    # secp256k1 shim print a warning before failing.
+    if not isinstance(seal_id, str) or not isinstance(signature, str) or len(signature) != 128:
+        raise ValueError("unsigned or malformed seal")
+    event = Event(
+        content=seal.get("content"),
+        public_key=seal["pubkey"],
+        created_at=seal.get("created_at"),
+        kind=seal["kind"],
+        tags=seal.get("tags"),
+        signature=signature,
+    )
+    computed_id = event.id
+    if computed_id != seal_id:
+        raise ValueError("seal id does not match its content")
+    event.id = computed_id  # verify() would hash the event again otherwise
+    try:
+        valid = event.verify()
+    except Exception:  # noqa: BLE001 - secp256k1 raises bare Exception for a bad point
+        valid = False
+    if not valid:
+        raise ValueError("invalid seal signature")
+
+
 def _verify_seal(seal, receiver_private_key):
-    """Decrypt and verify a kind 13 seal event. Returns decoded rumor dict."""
+    """Verify and decrypt a kind 13 seal event. Returns decoded rumor dict.
+
+    Raises ValueError unless the seal is signed by its `pubkey` (see
+    _check_seal_signature) and the rumor inside claims that same author.
+
+    The seal's tags are NOT required to be empty, although NIP-59 says they
+    MUST be: nostr-tools, go-nostr and rust-nostr accept seals with tags,
+    and Anagram (NIP-171) carries a ticket's invitation_proof in them. The
+    id and signature cover the tags, so only the author can have set them.
+    """
     seal = _event_dict_from_source(seal)
     if seal.get("kind") != KIND_NIP17_SEAL:
         raise ValueError("invalid seal kind")
     author = seal.get("pubkey")
     if not author:
         raise ValueError("missing author")
+    # Before decrypting: a forged seal costs one signature check, not an
+    # ECDH plus a NIP-44 decryption.
+    _check_seal_signature(seal)
     conv_key = get_conversation_key(receiver_private_key, author)
     payload = nip44_decrypt(seal["content"], conv_key)
     rumor = json.loads(payload)
@@ -63,7 +136,12 @@ def _verify_seal(seal, receiver_private_key):
 def decrypt_gift_wrap_to_rumor(gift_wrap, receiver_private_key):
     """Decrypt a kind 1059/21059 gift-wrap event into the underlying rumor.
 
-    Returns the rumor as a dict, or None if decryption fails.
+    Returns the rumor as a dict; never None. Raises ValueError when the
+    wrap is not addressed to `receiver_private_key` or its seal is not
+    validly signed by the rumor's author; a wrap that does not decrypt
+    raises from the NIP-44 / secp256k1 layer. The wrap's own signature (an
+    ephemeral key's) is left to the relay layer: it says nothing about who
+    wrote the rumor.
     """
     gift_wrap = _event_dict_from_source(gift_wrap)
     if gift_wrap.get("kind") not in (KIND_NIP17_GIFT_WRAP, 21059):
@@ -100,20 +178,30 @@ def make_rumor(
         tags.append(["subject", subject])
     if reply_to:
         tags.append(["e", reply_to])
+    pubkey = private_key.public_key.hex()
+    if created_at is None:
+        created_at = int(Event.epoch_seconds())
+    # NIP-17: "Fields `id` and `created_at` are required." The id is the
+    # NIP-01 hash of the unsigned event; clients key their storage on it.
     return {
+        "id": Event.compute_id(pubkey, created_at, KIND_NIP17_CHAT, tags, content),
         "kind": KIND_NIP17_CHAT,
         "content": content,
         "tags": tags,
-        "pubkey": private_key.public_key.hex(),
-        "created_at": created_at if created_at is not None else int(time.time()),
+        "pubkey": pubkey,
+        "created_at": created_at,
     }
 
 
 def make_seal(private_key, rumor, recipient_public_key_hex, created_at=None):
-    """Return a signed kind 13 seal event dict addressed to `recipient`."""
+    """Return a signed kind 13 seal event dict addressed to `recipient`.
+
+    `created_at` defaults to a randomly backdated timestamp (NIP-59); the
+    rumor keeps its own canonical timestamp.
+    """
     if created_at is None:
-        created_at = int(time.time())
-    rumor.setdefault("created_at", created_at)
+        created_at = tweaked_timestamp()
+    rumor.setdefault("created_at", int(Event.epoch_seconds()))
     clear_text = json.dumps(rumor, separators=(",", ":"))
     conv_key = get_conversation_key(private_key, recipient_public_key_hex)
     ciphertext = nip44_encrypt(clear_text, conv_key)
@@ -138,9 +226,12 @@ def make_seal(private_key, rumor, recipient_public_key_hex, created_at=None):
 
 
 def make_gift_wrap(recipient_public_key_hex, seal, created_at=None):
-    """Return a kind 1059 gift-wrap event dict addressed to the recipient."""
+    """Return a kind 1059 gift-wrap event dict addressed to the recipient.
+
+    `created_at` defaults to a randomly backdated timestamp (NIP-59).
+    """
     if created_at is None:
-        created_at = int(time.time())
+        created_at = tweaked_timestamp()
     wrapper = PrivateKey()
     clear_text = json.dumps(seal, separators=(",", ":"))
     conv_key = get_conversation_key(wrapper, recipient_public_key_hex)
@@ -167,9 +258,29 @@ def make_gift_wrap(recipient_public_key_hex, seal, created_at=None):
 
 
 def make_nip17_messages(
-    private_key, content, recipients, subject=None, reply_to=None, created_at=None
+    private_key,
+    content,
+    recipients,
+    subject=None,
+    reply_to=None,
+    created_at=None,
+    include_sender=True,
 ):
-    """Create a gift-wrap event for each recipient.
+    """Create a gift-wrap event for the sender and one for each recipient.
+
+    NIP-17: the rumor "must be sealed (`kind:13`) and then gift-wrapped
+    (`kind:1059`) to each receiver and the sender individually". The
+    sender's copy comes FIRST, so a client that keys its local copy of the
+    message on `messages[0]["id"]` deduplicates the relay echo of that wrap.
+    It is addressed to the sender's own pubkey without adding a `p` tag for
+    it to the rumor, so the sender's other clients see the message too and
+    the chat room (pubkey + `p` tags) is unchanged. Pass include_sender=False
+    to skip it (the result then starts with the first recipient's wrap).
+
+    The rumor keeps the real `created_at`; every seal and gift wrap gets its
+    own timestamp backdated from now by up to two days, so the N wraps of one
+    message are not linkable by time and a message replayed from a queue is
+    not dated before the window relays and subscriptions keep.
 
     Returns a list of normalized Event-compatible dicts that can be published
     directly to relays.
@@ -186,7 +297,7 @@ def make_nip17_messages(
     recipients = deduped
 
     if created_at is None:
-        created_at = int(time.time())
+        created_at = int(Event.epoch_seconds())
 
     rumor = make_rumor(
         private_key,
@@ -196,9 +307,14 @@ def make_nip17_messages(
         reply_to=reply_to,
         created_at=created_at,
     )
+    own_hex = private_key.public_key.hex()
+    targets = []
+    if include_sender and own_hex not in seen:
+        targets.append(own_hex)
+    targets.extend(recipients)
     messages = []
-    for recipient in recipients:
-        seal = make_seal(private_key, dict(rumor), recipient, created_at=created_at)
-        gift = make_gift_wrap(recipient, seal, created_at=created_at)
+    for target in targets:
+        seal = make_seal(private_key, dict(rumor), target, created_at=tweaked_timestamp())
+        gift = make_gift_wrap(target, seal, created_at=tweaked_timestamp())
         messages.append(gift)
     return messages

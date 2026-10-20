@@ -8,6 +8,45 @@ from hashlib import sha256
 
 from .message_type import ClientMessageType
 
+# CPython's json.dumps escapes non-ASCII unless ensure_ascii=False; MicroPython's
+# emits raw UTF-8 and rejects the keyword. Probe once so Event ids hash the
+# NIP-01 canonical bytes on both.
+try:
+    json.dumps("", ensure_ascii=False)
+    _JSON_DUMPS_KWARGS = {"ensure_ascii": False}
+except TypeError:
+    _JSON_DUMPS_KWARGS = {}
+
+
+def _nip01_short_escapes(data_str):
+    """Rewrite the escapes \\u0008 and \\u000c in json.dumps output as \\b and \\f.
+
+    NIP-01 writes backspace as \\b and form feed as \\f, as JSON.stringify and
+    CPython do; MicroPython's json.dumps writes \\u0008 and \\u000c instead, so
+    an id over text containing either character came out different.
+
+    Every backslash in json.dumps output starts an escape, so this walks them
+    one escape at a time: a plain replace() would also rewrite the escaped
+    backslash in front of a literal "u0008" (\\\\u0008).
+    """
+    if "\\u000" not in data_str:
+        return data_str
+    out = []
+    start = 0
+    i = data_str.find("\\")
+    while i >= 0:
+        if data_str[i + 1] != "u":
+            i = data_str.find("\\", i + 2)
+            continue
+        escape = data_str[i:i + 6]
+        if escape == "\\u0008" or escape == "\\u000c":
+            out.append(data_str[start:i])
+            out.append("\\b" if escape == "\\u0008" else "\\f")
+            start = i + 6
+        i = data_str.find("\\", i + 6)
+    out.append(data_str[start:])
+    return "".join(out)
+
 
 class EventKind(IntEnum):
     SET_METADATA = 0
@@ -59,9 +98,11 @@ class Event:
         public_key: str, created_at: int, kind: int, tags: List[List[str]], content: str
     ) -> bytes:
         data = [0, public_key, created_at, kind, tags, content]
-        #data_str = json.dumps(data, separators=(",", ":"), ensure_ascii=False) # ensure_ascii not supported on micropython
-        data_str = json.dumps(data, separators=(",", ":"))
-        return data_str.encode()
+        # NIP-01: the id is the hash of the UTF-8 JSON with no escaping of
+        # non-ASCII characters. MicroPython's json.dumps already emits raw
+        # UTF-8 (and has no ensure_ascii); CPython escapes unless told not to.
+        data_str = json.dumps(data, separators=(",", ":"), **_JSON_DUMPS_KWARGS)
+        return _nip01_short_escapes(data_str).encode()
 
     @staticmethod
     def compute_id_bytes(
