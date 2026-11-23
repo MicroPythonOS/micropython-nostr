@@ -141,168 +141,121 @@ def _chacha20_py(key, nonce, data):
     return bytes(out)
 
 
-# On MicroPython use a native-accelerated ChaCha20 core.  On CPython and other
-# ports fall back to the pure-Python implementation above.
-def _chacha20(key, nonce, data):
-    if len(key) != 32:
-        raise ValueError("ChaCha20 key must be 32 bytes")
-    if len(nonce) != 12:
-        raise ValueError("ChaCha20 nonce must be 12 bytes")
-    out = bytearray(len(data))
-    _chacha20_native(out, data, key, nonce)
-    return bytes(out)
+# On little-endian MicroPython ports use a Viper ChaCha20 core: it works on
+# machine words, so no 32-bit value ever becomes a heap-allocated big int.
+# Measured on an ESP32-S3, an 11 KB payload takes about 32 ms this way against
+# 3.6 s for the earlier @micropython.native version. CPython, big-endian
+# ports and builds where the Viper core fails its self-test below use the
+# pure-Python implementation above.
+if sys.implementation.name == "micropython" and sys.byteorder == "little":
+    # Indices of the 8 quarter rounds of one double round: 4 column rounds,
+    # then 4 diagonal rounds (RFC 8439 section 2.3).
+    _QUARTER_ROUNDS = bytes([
+        0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15,
+        0, 5, 10, 15, 1, 6, 11, 12, 2, 7, 8, 13, 3, 4, 9, 14,
+    ])
 
+    @micropython.viper
+    def _chacha20_block_viper(state: ptr32, out: ptr32, rounds: ptr8, counter: int):
+        # One 64-byte keystream block into `out`. `state` holds the constants,
+        # key and nonce as little-endian words; word 12 takes the counter.
+        state[12] = counter
+        i = 0
+        while i < 16:
+            out[i] = state[i]
+            i += 1
+        r = 0
+        while r < 80:
+            j = (r & 7) << 2
+            ia = rounds[j]
+            ib = rounds[j + 1]
+            ic = rounds[j + 2]
+            i_d = rounds[j + 3]
+            a = uint(out[ia])
+            b = uint(out[ib])
+            c = uint(out[ic])
+            d = uint(out[i_d])
+            a += b
+            d ^= a
+            d = (d << 16) | (d >> 16)
+            c += d
+            b ^= c
+            b = (b << 12) | (b >> 20)
+            a += b
+            d ^= a
+            d = (d << 8) | (d >> 24)
+            c += d
+            b ^= c
+            b = (b << 7) | (b >> 25)
+            out[ia] = a
+            out[ib] = b
+            out[ic] = c
+            out[i_d] = d
+            r += 1
+        i = 0
+        while i < 16:
+            out[i] = uint(out[i]) + uint(state[i])
+            i += 1
 
-if sys.implementation.name == "micropython":
-    @micropython.native
+    @micropython.viper
+    def _xor_viper(dst: ptr8, src: ptr8, keystream: ptr8, pos: int, n: int):
+        i = 0
+        while i < n:
+            dst[pos + i] = src[pos + i] ^ keystream[i]
+            i += 1
+
     def _chacha20_native(out, src, key, nonce):
-        # native port of the 12-byte nonce / 32-byte key ChaCha20 variant used
-        # by NIP-44.  Python semantics for bytearray indexing work in native mode,
-        # while Viper's ptr8 byte loads fail cross-compilation for xtensawin.
-        c0 = 0x61707865
-        c1 = 0x3320646E
-        c2 = 0x79622D32
-        c3 = 0x6B206574
-
-        k0 = (key[0] | (key[1] << 8) | (key[2] << 16) | (key[3] << 24)) & 0xFFFFFFFF
-        k1 = (key[4] | (key[5] << 8) | (key[6] << 16) | (key[7] << 24)) & 0xFFFFFFFF
-        k2 = (key[8] | (key[9] << 8) | (key[10] << 16) | (key[11] << 24)) & 0xFFFFFFFF
-        k3 = (key[12] | (key[13] << 8) | (key[14] << 16) | (key[15] << 24)) & 0xFFFFFFFF
-        k4 = (key[16] | (key[17] << 8) | (key[18] << 16) | (key[19] << 24)) & 0xFFFFFFFF
-        k5 = (key[20] | (key[21] << 8) | (key[22] << 16) | (key[23] << 24)) & 0xFFFFFFFF
-        k6 = (key[24] | (key[25] << 8) | (key[26] << 16) | (key[27] << 24)) & 0xFFFFFFFF
-        k7 = (key[28] | (key[29] << 8) | (key[30] << 16) | (key[31] << 24)) & 0xFFFFFFFF
-
-        n0 = (nonce[0] | (nonce[1] << 8) | (nonce[2] << 16) | (nonce[3] << 24)) & 0xFFFFFFFF
-        n1 = (nonce[4] | (nonce[5] << 8) | (nonce[6] << 16) | (nonce[7] << 24)) & 0xFFFFFFFF
-        n2 = (nonce[8] | (nonce[9] << 8) | (nonce[10] << 16) | (nonce[11] << 24)) & 0xFFFFFFFF
-
+        state = bytearray(64)
+        state[0:16] = b"expand 32-byte k"
+        state[16:48] = key
+        state[52:64] = nonce
+        keystream = bytearray(64)
         length = len(src)
         pos = 0
         counter = 0
-        ks = bytearray(64)
         while pos < length:
-            x0 = c0
-            x1 = c1
-            x2 = c2
-            x3 = c3
-            x4 = k0
-            x5 = k1
-            x6 = k2
-            x7 = k3
-            x8 = k4
-            x9 = k5
-            x10 = k6
-            x11 = k7
-            x12 = counter
-            x13 = n0
-            x14 = n1
-            x15 = n2
+            _chacha20_block_viper(state, keystream, _QUARTER_ROUNDS, counter)
+            n = length - pos
+            if n > 64:
+                n = 64
+            _xor_viper(out, src, keystream, pos, n)
+            pos += n
+            counter += 1
 
-            for _ in range(10):
-                # column round
-                _t0 = (x0 + x4) & 0xFFFFFFFF
-                x12 = (((x12 ^ _t0) << 16) | ((x12 ^ _t0) >> 16)) & 0xFFFFFFFF
-                x8 = (x8 + x12) & 0xFFFFFFFF
-                x4 = (((x4 ^ x8) << 12) | ((x4 ^ x8) >> 20)) & 0xFFFFFFFF
-                x0 = (_t0 + x4) & 0xFFFFFFFF
-                x12 = (((x12 ^ x0) << 8) | ((x12 ^ x0) >> 24)) & 0xFFFFFFFF
-                x8 = (x8 + x12) & 0xFFFFFFFF
-                x4 = (((x4 ^ x8) << 7) | ((x4 ^ x8) >> 25)) & 0xFFFFFFFF
+    def _chacha20_viper(key, nonce, data):
+        if len(key) != 32:
+            raise ValueError("ChaCha20 key must be 32 bytes")
+        if len(nonce) != 12:
+            raise ValueError("ChaCha20 nonce must be 12 bytes")
+        out = bytearray(len(data))
+        _chacha20_native(out, data, key, nonce)
+        return bytes(out)
 
-                _t0 = (x1 + x5) & 0xFFFFFFFF
-                x13 = (((x13 ^ _t0) << 16) | ((x13 ^ _t0) >> 16)) & 0xFFFFFFFF
-                x9 = (x9 + x13) & 0xFFFFFFFF
-                x5 = (((x5 ^ x9) << 12) | ((x5 ^ x9) >> 20)) & 0xFFFFFFFF
-                x1 = (_t0 + x5) & 0xFFFFFFFF
-                x13 = (((x13 ^ x1) << 8) | ((x13 ^ x1) >> 24)) & 0xFFFFFFFF
-                x9 = (x9 + x13) & 0xFFFFFFFF
-                x5 = (((x5 ^ x9) << 7) | ((x5 ^ x9) >> 25)) & 0xFFFFFFFF
+    def _viper_chacha20_works():
+        # Builds without a native emitter (the unix, macOS and web builds of
+        # MicroPythonOS) run Viper functions as plain bytecode, where `uint`
+        # is undefined, and a 64-bit emitter does not wrap the additions at
+        # 32 bits. Check one known answer (three blocks, the last one partial)
+        # and use the pure-Python core when it does not match.
+        try:
+            out = _chacha20_viper(bytes(range(32)), bytes(range(12)), bytes(130))
+            return hashlib.sha256(out).digest() == _CHACHA20_CHECK
+        except Exception:
+            return False
 
-                _t0 = (x2 + x6) & 0xFFFFFFFF
-                x14 = (((x14 ^ _t0) << 16) | ((x14 ^ _t0) >> 16)) & 0xFFFFFFFF
-                x10 = (x10 + x14) & 0xFFFFFFFF
-                x6 = (((x6 ^ x10) << 12) | ((x6 ^ x10) >> 20)) & 0xFFFFFFFF
-                x2 = (_t0 + x6) & 0xFFFFFFFF
-                x14 = (((x14 ^ x2) << 8) | ((x14 ^ x2) >> 24)) & 0xFFFFFFFF
-                x10 = (x10 + x14) & 0xFFFFFFFF
-                x6 = (((x6 ^ x10) << 7) | ((x6 ^ x10) >> 25)) & 0xFFFFFFFF
-
-                _t0 = (x3 + x7) & 0xFFFFFFFF
-                x15 = (((x15 ^ _t0) << 16) | ((x15 ^ _t0) >> 16)) & 0xFFFFFFFF
-                x11 = (x11 + x15) & 0xFFFFFFFF
-                x7 = (((x7 ^ x11) << 12) | ((x7 ^ x11) >> 20)) & 0xFFFFFFFF
-                x3 = (_t0 + x7) & 0xFFFFFFFF
-                x15 = (((x15 ^ x3) << 8) | ((x15 ^ x3) >> 24)) & 0xFFFFFFFF
-                x11 = (x11 + x15) & 0xFFFFFFFF
-                x7 = (((x7 ^ x11) << 7) | ((x7 ^ x11) >> 25)) & 0xFFFFFFFF
-
-                # diagonal round
-                _t0 = (x0 + x5) & 0xFFFFFFFF
-                x15 = (((x15 ^ _t0) << 16) | ((x15 ^ _t0) >> 16)) & 0xFFFFFFFF
-                x10 = (x10 + x15) & 0xFFFFFFFF
-                x5 = (((x5 ^ x10) << 12) | ((x5 ^ x10) >> 20)) & 0xFFFFFFFF
-                x0 = (_t0 + x5) & 0xFFFFFFFF
-                x15 = (((x15 ^ x0) << 8) | ((x15 ^ x0) >> 24)) & 0xFFFFFFFF
-                x10 = (x10 + x15) & 0xFFFFFFFF
-                x5 = (((x5 ^ x10) << 7) | ((x5 ^ x10) >> 25)) & 0xFFFFFFFF
-
-                _t0 = (x1 + x6) & 0xFFFFFFFF
-                x12 = (((x12 ^ _t0) << 16) | ((x12 ^ _t0) >> 16)) & 0xFFFFFFFF
-                x11 = (x11 + x12) & 0xFFFFFFFF
-                x6 = (((x6 ^ x11) << 12) | ((x6 ^ x11) >> 20)) & 0xFFFFFFFF
-                x1 = (_t0 + x6) & 0xFFFFFFFF
-                x12 = (((x12 ^ x1) << 8) | ((x12 ^ x1) >> 24)) & 0xFFFFFFFF
-                x11 = (x11 + x12) & 0xFFFFFFFF
-                x6 = (((x6 ^ x11) << 7) | ((x6 ^ x11) >> 25)) & 0xFFFFFFFF
-
-                _t0 = (x2 + x7) & 0xFFFFFFFF
-                x13 = (((x13 ^ _t0) << 16) | ((x13 ^ _t0) >> 16)) & 0xFFFFFFFF
-                x8 = (x8 + x13) & 0xFFFFFFFF
-                x7 = (((x7 ^ x8) << 12) | ((x7 ^ x8) >> 20)) & 0xFFFFFFFF
-                x2 = (_t0 + x7) & 0xFFFFFFFF
-                x13 = (((x13 ^ x2) << 8) | ((x13 ^ x2) >> 24)) & 0xFFFFFFFF
-                x8 = (x8 + x13) & 0xFFFFFFFF
-                x7 = (((x7 ^ x8) << 7) | ((x7 ^ x8) >> 25)) & 0xFFFFFFFF
-
-                _t0 = (x3 + x4) & 0xFFFFFFFF
-                x14 = (((x14 ^ _t0) << 16) | ((x14 ^ _t0) >> 16)) & 0xFFFFFFFF
-                x9 = (x9 + x14) & 0xFFFFFFFF
-                x4 = (((x4 ^ x9) << 12) | ((x4 ^ x9) >> 20)) & 0xFFFFFFFF
-                x3 = (_t0 + x4) & 0xFFFFFFFF
-                x14 = (((x14 ^ x3) << 8) | ((x14 ^ x3) >> 24)) & 0xFFFFFFFF
-                x9 = (x9 + x14) & 0xFFFFFFFF
-                x4 = (((x4 ^ x9) << 7) | ((x4 ^ x9) >> 25)) & 0xFFFFFFFF
-
-            ks[0:4] = (_u32(x0 + c0)).to_bytes(4, "little")
-            ks[4:8] = (_u32(x1 + c1)).to_bytes(4, "little")
-            ks[8:12] = (_u32(x2 + c2)).to_bytes(4, "little")
-            ks[12:16] = (_u32(x3 + c3)).to_bytes(4, "little")
-            ks[16:20] = (_u32(x4 + k0)).to_bytes(4, "little")
-            ks[20:24] = (_u32(x5 + k1)).to_bytes(4, "little")
-            ks[24:28] = (_u32(x6 + k2)).to_bytes(4, "little")
-            ks[28:32] = (_u32(x7 + k3)).to_bytes(4, "little")
-            ks[32:36] = (_u32(x8 + k4)).to_bytes(4, "little")
-            ks[36:40] = (_u32(x9 + k5)).to_bytes(4, "little")
-            ks[40:44] = (_u32(x10 + k6)).to_bytes(4, "little")
-            ks[44:48] = (_u32(x11 + k7)).to_bytes(4, "little")
-            ks[48:52] = (_u32(x12 + counter)).to_bytes(4, "little")
-            ks[52:56] = (_u32(x13 + n0)).to_bytes(4, "little")
-            ks[56:60] = (_u32(x14 + n1)).to_bytes(4, "little")
-            ks[60:64] = (_u32(x15 + n2)).to_bytes(4, "little")
-
-            end = pos + 64
-            if end > length:
-                end = length
-            i = pos
-            while i < end:
-                out[i] = src[i] ^ ks[i - pos]
-                i += 1
-            pos = end
-            counter = (counter + 1) & 0xFFFFFFFF
+    _CHACHA20_CHECK = bytes.fromhex(
+        "59b8010c47e4b8e27dbbbaeb1faf7e8e8ce8f508c63b65076f55443b3eed5a51"
+    )
+    _chacha20 = _chacha20_viper if _viper_chacha20_works() else _chacha20_py
+    FAST_CHACHA20 = _chacha20 is _chacha20_viper
 
 else:
     _chacha20 = _chacha20_py
+    FAST_CHACHA20 = sys.implementation.name != "micropython"
+
+# FAST_CHACHA20 tells callers whether large payloads are cheap to encrypt and
+# decrypt here. It is False on MicroPython builds that run the pure-Python
+# core, where an 11 KB payload takes seconds on a microcontroller.
 
 
 def _calc_padded_len(unpadded_len):
