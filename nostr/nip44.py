@@ -236,15 +236,16 @@ if sys.implementation.name == "micropython" and sys.byteorder == "little":
         # MicroPythonOS) run Viper functions as plain bytecode, where `uint`
         # is undefined, and a 64-bit emitter does not wrap the additions at
         # 32 bits. Check one known answer (three blocks, the last one partial)
-        # and use the pure-Python core when it does not match.
+        # and use the pure-Python core when it does not match. The input is
+        # not all zeros, so an XOR step that ignores it fails the check too.
         try:
-            out = _chacha20_viper(bytes(range(32)), bytes(range(12)), bytes(130))
+            out = _chacha20_viper(bytes(range(32)), bytes(range(12)), bytes(range(130)))
             return hashlib.sha256(out).digest() == _CHACHA20_CHECK
         except Exception:
             return False
 
     _CHACHA20_CHECK = bytes.fromhex(
-        "59b8010c47e4b8e27dbbbaeb1faf7e8e8ce8f508c63b65076f55443b3eed5a51"
+        "606f72c1a0aba53e460d2d3e249efe6135979a48710b8ed8e29bc656611d25a4"
     )
     _chacha20 = _chacha20_viper if _viper_chacha20_works() else _chacha20_py
     FAST_CHACHA20 = _chacha20 is _chacha20_viper
